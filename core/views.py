@@ -4,10 +4,12 @@ from rest_framework.response import Response
 from core.serializers import *
 from rest_framework.views import APIView
 from .models import *
-from rest_framework import status, permissions
+from rest_framework import status, permissions, generics
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework.permissions import IsAuthenticated
+from .permissions import IsAdmin, IsEmployer, IsCandidate, IsOwnerEmployer
 
 # Create your views here.
 def home_api(request): 
@@ -19,13 +21,81 @@ class JobListAPIView(APIView):
         serializer = JobSerializer(jobs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-class JobCreateAPIView(APIView):
-    def post(self,request):
-        serializer = JobSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST) 
+class JobCreateAPIView(generics.CreateAPIView):
+    """Only Employers can post jobs. (Overrides the open Day 5 version.)"""
+    queryset = Job.objects.all()
+    serializer_class = JobSerializer
+    permission_classes = [IsAuthenticated, IsEmployer]
+ 
+    def perform_create(self, serializer):
+        # auto-attach the job to the logged-in employer's profile —
+        # an employer can never post a job "as" someone else
+        employer = Employer.objects.get(user=self.request.user)
+        serializer.save(employer=employer)
+ 
+ 
+class JobDeleteAPIView(generics.DestroyAPIView):
+    """
+    Only the Employer who OWNS a job can delete it — demonstrates
+    object-level permission, not just role-level.
+    """
+    queryset = Job.objects.all()
+    serializer_class = JobSerializer
+    permission_classes = [IsAuthenticated, IsEmployer, IsOwnerEmployer]
+
+
+class ApplyToJobAPIView(APIView):
+    """Only Candidates can apply to jobs."""
+    permission_classes = [IsAuthenticated, IsCandidate]
+ 
+    def post(self, request, job_id):
+        try:
+            job = Job.objects.get(id=job_id)
+        except Job.DoesNotExist:
+            return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
+ 
+        candidate = Candidate.objects.get(user=request.user)
+ 
+        if Application.objects.filter(candidate=candidate, job=job).exists():
+            return Response(
+                {"detail": "You have already applied to this job."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        application = Application.objects.create(candidate=candidate, job=job)
+        return Response(
+            {"id": application.id, "job": job.title, "status": application.status},
+            status=status.HTTP_201_CREATED,
+        )
+ 
+ 
+class AdminUserListAPIView(generics.ListAPIView):
+    """
+    Admin-only: full visibility into all users on the platform.
+    Demonstrates 'Admin can control system'.
+    """
+    permission_classes = [IsAuthenticated, IsAdmin]
+ 
+    def get(self, request):
+        from .models import User
+        users = User.objects.all().values("id", "email", "role", "is_active", "is_verified")
+        return Response(list(users))
+ 
+ 
+class AdminDeactivateUserAPIView(APIView):
+    """Admin-only: deactivate any user account."""
+    permission_classes = [IsAuthenticated, IsAdmin]
+ 
+    def post(self, request, user_id):
+        from .models import User
+        try:
+            target = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+ 
+        target.is_active = False
+        target.save(update_fields=["is_active"])
+        return Response({"detail": f"{target.email} has been deactivated."})
     
 class UserTestAPIView(APIView):
     def get(self, request):
