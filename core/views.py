@@ -1,4 +1,4 @@
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
 from rest_framework.response import Response
 from core.serializers import *
@@ -154,4 +154,126 @@ class ProtectedPingView(APIView):
         return Response({
             "message": f"Hello {request.user.email}, you are authenticated!",
             "role": request.user.role,
-        })    
+        })   
+
+class EmployerProfileView(APIView):
+    """GET / PUT / PATCH / DELETE the logged-in Employer's own profile."""
+    permission_classes = [permissions.IsAuthenticated, IsEmployer]
+ 
+    def get_object(self, request):
+        return get_object_or_404(Employer, user=request.user, is_deleted=False)
+ 
+    def get(self, request):
+        profile = self.get_object(request)
+        return Response(EmployerProfileSerializer(profile).data)
+ 
+    def put(self, request):
+        profile = self.get_object(request)
+        serializer = EmployerProfileSerializer(profile, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+ 
+    def patch(self, request):
+        profile = self.get_object(request)
+        serializer = EmployerProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+ 
+    def delete(self, request):
+        profile = self.get_object(request)
+        profile.soft_delete()
+        return Response({"detail": "Employer profile deactivated."}, status=status.HTTP_204_NO_CONTENT)
+ 
+ 
+# ---------- Candidate: self profile ----------
+ 
+class CandidateProfileView(APIView):
+    """GET / PUT / PATCH / DELETE the logged-in Candidate's own profile."""
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get_object(self, request):
+        return get_object_or_404(Candidate, user=request.user, is_deleted=False)
+ 
+    def get(self, request):
+        profile = self.get_object(request)
+        return Response(CandidateProfileSerializer(profile).data)
+ 
+    def put(self, request):
+        profile = self.get_object(request)
+        serializer = CandidateProfileSerializer(profile, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+ 
+    def patch(self, request):
+        profile = self.get_object(request)
+        serializer = CandidateProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+ 
+    def delete(self, request):
+        profile = self.get_object(request)
+        profile.soft_delete()
+        return Response({"detail": "Candidate profile deactivated."}, status=status.HTTP_204_NO_CONTENT)
+ 
+ 
+# ---------- Admin override: any profile by id ----------
+ 
+class AdminEmployerDetailView(APIView):
+    """Admin-only: view/update/soft-delete ANY Employer profile by id."""
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def get(self, request, pk):
+        profile = get_object_or_404(Employer, pk=pk)
+        return Response(EmployerProfileSerializer(profile).data)
+ 
+    def patch(self, request, pk):
+        profile = get_object_or_404(Employer, pk=pk)
+        serializer = EmployerProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+ 
+    def delete(self, request, pk):
+        profile = get_object_or_404(Employer, pk=pk)
+        profile.soft_delete()
+        return Response({"detail": "Employer profile deactivated by admin."}, status=status.HTTP_204_NO_CONTENT)
+ 
+ 
+class AdminVerifyEmployerView(APIView):
+    """
+    Admin-only: toggle an Employer's verification status.
+    Separated from the generic update view since is_verified is
+    intentionally read-only on the self-serve EmployerProfileSerializer.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def post(self, request, pk):
+        profile = get_object_or_404(Employer, pk=pk)
+        profile.is_verified = True
+        profile.save(update_fields=["is_verified"])
+        return Response({"detail": f"{profile.company_name} is now verified."})
+ 
+ 
+class AdminCandidateDetailView(APIView):
+    """Admin-only: view/update/soft-delete ANY Candidate profile by id."""
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def get(self, request, pk):
+        profile = get_object_or_404(Candidate, pk=pk)
+        return Response(CandidateProfileSerializer(profile).data)
+ 
+    def patch(self, request, pk):
+        profile = get_object_or_404(Candidate, pk=pk)
+        serializer = CandidateProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+ 
+    def delete(self, request, pk):
+        profile = get_object_or_404(Candidate, pk=pk)
+        profile.soft_delete()
+        return Response({"detail": "Candidate profile deactivated by admin."}, status=status.HTTP_204_NO_CONTENT)         

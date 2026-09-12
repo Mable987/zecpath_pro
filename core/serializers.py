@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from .models import *
-
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth.password_validation import validate_password
 
@@ -51,4 +50,43 @@ class LoginSerializer(TokenObtainPairSerializer):
         token["email"] = user.email
         token["role"] = user.role
         return token        
-        
+
+class EmployerProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Employer
+        fields = [
+            "id", "company_name", "company_website", "domain", "size",
+            "is_verified", "created_at", "updated_at",
+        ]
+        # is_verified is admin-controlled, not self-editable — see views.py
+        read_only_fields = ["id", "is_verified", "created_at", "updated_at"]
+ 
+    def validate_company_name(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Company name cannot be blank.")
+        return value
+ 
+ 
+class CandidateProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Candidate
+        fields = [
+            "id", "full_name", "resume", "skills", "education",
+            "experience_years", "expected_salary", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+ 
+    def validate_full_name(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Full name cannot be blank.")
+        return value
+ 
+    def validate_experience_years(self, value):
+        if value < 0 or value > 60:
+            raise serializers.ValidationError("Experience years must be between 0 and 60.")
+        return value
+ 
+    def validate_expected_salary(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Expected salary cannot be negative.")
+        return value        

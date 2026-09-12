@@ -60,22 +60,66 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class Employer(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    SIZE_CHOICES = [
+        ("1-10", "1-10 employees"),
+        ("11-50", "11-50 employees"),
+        ("51-200", "51-200 employees"),
+        ("201-500", "201-500 employees"),
+        ("500+", "500+ employees"),
+    ]
+ 
+    user = models.OneToOneField("User", on_delete=models.CASCADE)
     company_name = models.CharField(max_length=150)
     company_website = models.URLField(blank=True, null=True)
-
+    domain = models.CharField(max_length=100, blank=True)               # e.g. "Fintech", "Healthcare"
+    size = models.CharField(max_length=20, choices=SIZE_CHOICES, blank=True)
+    is_verified = models.BooleanField(default=False)                    # company verification status
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_deleted = models.BooleanField(default=False)                     # soft delete flag
+    deleted_at = models.DateTimeField(null=True, blank=True)
+ 
     def __str__(self):
         return self.company_name
-
-
+ 
+    def soft_delete(self):
+        from django.utils import timezone
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["is_deleted", "deleted_at"])
+ 
+ 
 class Candidate(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    EDUCATION_CHOICES = [
+        ("high_school", "High School"),
+        ("bachelors", "Bachelor's Degree"),
+        ("masters", "Master's Degree"),
+        ("phd", "PhD"),
+        ("other", "Other"),
+    ]
+ 
+    user = models.OneToOneField("User", on_delete=models.CASCADE)
     full_name = models.CharField(max_length=150)
     resume = models.FileField(upload_to="resumes/", blank=True, null=True)
-    skills = models.TextField(blank=True)
-
+    skills = models.TextField(blank=True)                                # comma-separated or free text
+    education = models.CharField(max_length=20, choices=EDUCATION_CHOICES, blank=True)
+    experience_years = models.PositiveIntegerField(default=0)
+    expected_salary = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+ 
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_deleted = models.BooleanField(default=False)                      # soft delete flag
+    deleted_at = models.DateTimeField(null=True, blank=True)
+ 
     def __str__(self):
         return self.full_name
+ 
+    def soft_delete(self):
+        from django.utils import timezone
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["is_deleted", "deleted_at"])
 
 
 class Job(models.Model):

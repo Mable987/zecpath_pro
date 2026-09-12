@@ -14,7 +14,12 @@ urlpatterns = [
     path("api/logout/", LogoutView.as_view(), name="logout_api"),
     path("api/refresh/", RefreshTokenView.as_view(), name="refresh_api"),
     path("api/protected/", ProtectedPingView.as_view(), name="protected_api"),
-
     path("api/admin/users/", AdminUserListAPIView.as_view(), name="admin_user_list_api"),
     path("api/admin/users/<int:user_id>/deactivate/", AdminDeactivateUserAPIView.as_view(), name="admin_deactivate_user_api"),
+    path("api/profile/employer/", EmployerProfileView.as_view(), name="employer_profile"),
+    path("api/profile/candidate/", CandidateProfileView.as_view(), name="candidate_profile"),
+ 
+    path("api/admin/employers/<int:pk>/", AdminEmployerDetailView.as_view(), name="admin_employer_detail"),
+    path("api/admin/employers/<int:pk>/verify/", AdminVerifyEmployerView.as_view(), name="admin_verify_employer"),
+    path("api/admin/candidates/<int:pk>/", AdminCandidateDetailView.as_view(), name="admin_candidate_detail"),
 ]
