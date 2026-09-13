@@ -10,6 +10,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsAdmin, IsEmployer, IsCandidate, IsOwnerEmployer
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.core.exceptions import ValidationError as DjangoValidationError
+from .validators import validate_resume_file
+
 
 # Create your views here.
 def home_api(request): 
@@ -276,4 +280,60 @@ class AdminCandidateDetailView(APIView):
     def delete(self, request, pk):
         profile = get_object_or_404(Candidate, pk=pk)
         profile.soft_delete()
-        return Response({"detail": "Candidate profile deactivated by admin."}, status=status.HTTP_204_NO_CONTENT)         
+        return Response({"detail": "Candidate profile deactivated by admin."}, status=status.HTTP_204_NO_CONTENT) 
+    
+class ResumeUploadView(APIView):
+    """
+    POST a multipart/form-data request with a 'resume' file field to
+    upload or REPLACE the logged-in Candidate's resume.
+ 
+    Replacement behavior: if a resume already exists, the old file is
+    deleted from disk before the new one is saved — otherwise old
+    resume files would silently accumulate on disk forever, one per
+    upload, even though only the latest is ever referenced.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+    parser_classes = [MultiPartParser, FormParser]
+ 
+    def post(self, request):
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+        uploaded_file = request.FILES.get("resume")
+ 
+        if not uploaded_file:
+            return Response(
+                {"detail": "No file provided. Attach a file under the 'resume' field."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        try:
+            validate_resume_file(uploaded_file)
+        except DjangoValidationError as e:
+            return Response({"detail": e.messages}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        # Replacement: remove the old file from disk before attaching the new one
+        if candidate.resume:
+            candidate.resume.delete(save=False)
+ 
+        candidate.resume = uploaded_file
+        candidate.save(update_fields=["resume", "updated_at"])
+ 
+        return Response(
+            {
+                "detail": "Resume uploaded successfully.",
+                "resume_url": candidate.resume.url,
+                "file_name": candidate.resume.name,
+            },
+            status=status.HTTP_200_OK,
+        )
+ 
+    def delete(self, request):
+        """Remove the resume entirely (no replacement)."""
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+ 
+        if not candidate.resume:
+            return Response({"detail": "No resume on file."}, status=status.HTTP_404_NOT_FOUND)
+ 
+        candidate.resume.delete(save=False)
+        candidate.resume = None
+        candidate.save(update_fields=["resume", "updated_at"])
+        return Response({"detail": "Resume removed."}, status=status.HTTP_204_NO_CONTENT)            

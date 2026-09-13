@@ -1,6 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.auth.base_user import BaseUserManager
+import uuid, os
+from .validators import validate_resume_file
 
 
 class Role(models.TextChoices):
@@ -91,6 +93,10 @@ class Employer(models.Model):
  
  
 class Candidate(models.Model):
+    def resume_upload_path(instance, filename):
+        ext = os.path.splitext(filename)[1].lower()
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+        return f"resumes/{instance.user_id}/{unique_name}"
     EDUCATION_CHOICES = [
         ("high_school", "High School"),
         ("bachelors", "Bachelor's Degree"),
@@ -101,12 +107,12 @@ class Candidate(models.Model):
  
     user = models.OneToOneField("User", on_delete=models.CASCADE)
     full_name = models.CharField(max_length=150)
-    resume = models.FileField(upload_to="resumes/", blank=True, null=True)
+    resume = models.FileField(upload_to=resume_upload_path, blank=True, null=True, validators=[validate_resume_file])
     skills = models.TextField(blank=True)                                # comma-separated or free text
     education = models.CharField(max_length=20, choices=EDUCATION_CHOICES, blank=True)
     experience_years = models.PositiveIntegerField(default=0)
     expected_salary = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
- 
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField(default=False)                      # soft delete flag
@@ -145,3 +151,4 @@ class Application(models.Model):
 
     def __str__(self):
         return f"{self.candidate.full_name} applied for {self.job.title}"
+    
