@@ -23,4 +23,5 @@ urlpatterns = [
     path("api/admin/employers/<int:pk>/verify/", AdminVerifyEmployerView.as_view(), name="admin_verify_employer"),
     path("api/admin/candidates/<int:pk>/", AdminCandidateDetailView.as_view(), name="admin_candidate_detail"),
     path("api/profile/candidate/resume/", ResumeUploadView.as_view(), name="resume_upload"),
+    path("api/applications/", ApplicationListAPIView.as_view(), name="application_list"),
 ]

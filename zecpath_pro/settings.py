@@ -27,6 +27,14 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",   
     ),
     "EXCEPTION_HANDLER": "core.exceptions.custom_exception_handler",
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 10,
+    
+    "DEFAULT_FILTER_BACKENDS": (
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.OrderingFilter",
+        "rest_framework.filters.SearchFilter",
+    ),
 }
 
 # Simple JWT settings
@@ -59,6 +67,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
+    "django_filters",
 ]
 
 MIDDLEWARE = [

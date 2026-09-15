@@ -13,18 +13,58 @@ from .permissions import IsAdmin, IsEmployer, IsCandidate, IsOwnerEmployer
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .validators import validate_resume_file
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
+from .filters import JobFilter, ApplicationFilter, UserFilter
 
 
 # Create your views here.
 def home_api(request): 
     return JsonResponse({"message": "Hello Zecpath Backend"})
 
-class JobListAPIView(APIView):
-    def get(self, request):
-        jobs = Job.objects.all()
-        serializer = JobSerializer(jobs, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
+class JobListAPIView(generics.ListAPIView):
+    serializer_class = JobSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = JobFilter
+    search_fields = ["title", "description"]
+    ordering_fields = ["posted_at", "title"]
+    ordering = ["-posted_at"]  # default: newest first
+ 
+    def get_queryset(self):
+        return Job.objects.select_related("employer").all()
+    
+class ApplicationListAPIView(generics.ListAPIView):
+    """
+    GET /api/applications/?status=pending&ordering=-applied_at
+ 
+    - Candidates see only their OWN applications (never anyone else's —
+      enforced in get_queryset, not just by a permission check).
+    - Admins see ALL applications, filterable by status/date.
+    - N+1 prevention: select_related("job", "candidate") — without
+      this, serializing each application's job title and candidate name
+      would fire two extra queries PER ROW (2 x page_size queries just
+      for a single page of results).
+    """
+    serializer_class = ApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_class = ApplicationFilter
+    ordering_fields = ["applied_at"]
+    ordering = ["-applied_at"]
+ 
+    def get_queryset(self):
+        base = Application.objects.select_related("job", "candidate")
+        user = self.request.user
+ 
+        if user.role == "admin":
+            return base.all()
+        elif user.role == "candidate":
+            return base.filter(candidate__user=user)
+        else:
+            # Employers see applications to THEIR jobs only
+            return base.filter(job__employer__user=user)
+    
 class JobCreateAPIView(generics.CreateAPIView):
     """Only Employers can post jobs. (Overrides the open Day 5 version.)"""
     queryset = Job.objects.all()
@@ -75,15 +115,21 @@ class ApplyToJobAPIView(APIView):
  
 class AdminUserListAPIView(generics.ListAPIView):
     """
-    Admin-only: full visibility into all users on the platform.
-    Demonstrates 'Admin can control system'.
-    """
-    permission_classes = [IsAuthenticated, IsAdmin]
+    GET /api/admin/users/?role=candidate&is_active=true&search=nico
  
-    def get(self, request):
-        from .models import User
-        users = User.objects.all().values("id", "email", "role", "is_active", "is_verified")
-        return Response(list(users))
+    - Filtering by role/is_active via UserFilter.
+    - search_fields lets an Admin find a user by partial email match.
+    - No select_related needed here since UserSerializer doesn't touch
+      any foreign-key relations.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = UserFilter
+    search_fields = ["email"]
+    ordering_fields = ["created_at", "email"]
+    ordering = ["-created_at"]
+    queryset = User.objects.all()
  
  
 class AdminDeactivateUserAPIView(APIView):

@@ -90,3 +90,12 @@ class CandidateProfileSerializer(serializers.ModelSerializer):
         if value is not None and value < 0:
             raise serializers.ValidationError("Expected salary cannot be negative.")
         return value        
+class ApplicationSerializer(serializers.ModelSerializer):
+    job_title = serializers.CharField(source="job.title", read_only=True)
+    candidate_name = serializers.CharField(source="candidate.full_name", read_only=True)
+ 
+    class Meta:
+        model = Application
+        fields = ["id", "job", "job_title", "candidate", "candidate_name",
+                  "applied_at", "status"]
+        read_only_fields = ["id", "applied_at"]    
