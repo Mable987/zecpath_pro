@@ -3,6 +3,8 @@ from django.http import JsonResponse
 from rest_framework.response import Response
 from core.serializers import *
 from rest_framework.views import APIView
+
+from core.services.auth_service import register_user
 from .models import *
 from rest_framework import status, permissions, generics
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -154,12 +156,16 @@ class UserTestAPIView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)       
 
 class SignupView(APIView):
-    permission_classes = [permissions.AllowAny]  # signup must be open to everyone
+    permission_classes = [permissions.AllowAny]
  
     def post(self, request):
-        serializer = SignupSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        data = request.data
+        user = register_user(
+            email=data.get("email", ""),
+            password=data.get("password", ""),
+            phone=data.get("phone", ""),
+            role=data.get("role", "candidate"),
+        )
         return Response(
             {"id": user.id, "email": user.email, "role": user.role},
             status=status.HTTP_201_CREATED,

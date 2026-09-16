@@ -15,27 +15,6 @@ class UserSerializer(serializers.ModelSerializer):
             'password': {'write_only': True}
         }   
           
-class SignupSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
- 
-    class Meta:
-        model = User
-        fields = ["id", "email", "phone", "role", "password"]
- 
-    def validate_email(self, value):
-        if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        return value
- 
-    def validate_phone(self, value):
-        if value and User.objects.filter(phone=value).exists():
-            raise serializers.ValidationError("A user with this phone number already exists.")
-        return value
- 
-    def create(self, validated_data):
-        # use create_user so the password gets hashed (never save raw passwords)
-        return User.objects.create_user(**validated_data)
- 
  
 class LoginSerializer(TokenObtainPairSerializer):
     """
