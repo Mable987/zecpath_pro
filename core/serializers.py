@@ -6,7 +6,27 @@ from django.contrib.auth.password_validation import validate_password
 class JobSerializer(serializers.ModelSerializer):
     class Meta:
         model = Job
-        fields = '__all__'
+        fields = [
+            "id", "employer", "title", "description", "skills", "experience",
+            "salary_min", "salary_max", "location", "job_type", "status",
+            "posted_at", "updated_at",
+        ]
+        read_only_fields = ["id", "employer", "posted_at", "updated_at"]
+ 
+    def validate(self, data):
+        salary_min = data.get("salary_min", getattr(self.instance, "salary_min", None))
+        salary_max = data.get("salary_max", getattr(self.instance, "salary_max", None))
+        if salary_min is not None and salary_max is not None and salary_min > salary_max:
+            raise serializers.ValidationError(
+                {"salary_min": "salary_min cannot be greater than salary_max."}
+            )
+        return data
+ 
+    def validate_title(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Job title cannot be blank.")
+        return value
+    
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User

@@ -129,15 +129,49 @@ class Candidate(models.Model):
 
 
 class Job(models.Model):
-    employer = models.ForeignKey(Employer, on_delete=models.CASCADE, related_name="jobs")
+    JOB_TYPE_CHOICES = [
+        ("full_time", "Full-time"),
+        ("part_time", "Part-time"),
+        ("contract", "Contract"),
+        ("internship", "Internship"),
+        ("remote", "Remote"),
+    ]
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("inactive", "Inactive"),
+        ("closed", "Closed"),
+    ]
+    EXPERIENCE_CHOICES = [
+        ("fresher", "Fresher"),
+        ("0-1", "0-1 years"),
+        ("1-3", "1-3 years"),
+        ("3-5", "3-5 years"),
+        ("5+", "5+ years"),
+    ]
+ 
+    employer = models.ForeignKey("Employer", on_delete=models.CASCADE, related_name="jobs")
     title = models.CharField(max_length=100)
     description = models.TextField()
+    skills = models.TextField(help_text="Comma-separated list, e.g. 'Python, Django, SQL'")
+    experience = models.CharField(max_length=20, choices=EXPERIENCE_CHOICES, default="fresher")
+    salary_min = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    salary_max = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    location = models.CharField(max_length=100, blank=True)
+    job_type = models.CharField(max_length=20, choices=JOB_TYPE_CHOICES, default="full_time")
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="active")
+ 
     posted_at = models.DateTimeField(auto_now_add=True)
-
+    updated_at = models.DateTimeField(auto_now=True)
+ 
     def __str__(self):
-        return self.title
-
-
+        return f"{self.title} ({self.get_status_display()})"
+ 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.salary_min is not None and self.salary_max is not None:
+            if self.salary_min > self.salary_max:
+                raise ValidationError("salary_min cannot be greater than salary_max.")
+            
 class Application(models.Model):
     STATUS_CHOICES = [
         ("pending", "Pending"),

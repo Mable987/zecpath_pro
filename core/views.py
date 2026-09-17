@@ -68,16 +68,57 @@ class ApplicationListAPIView(generics.ListAPIView):
             return base.filter(job__employer__user=user)
     
 class JobCreateAPIView(generics.CreateAPIView):
-    """Only Employers can post jobs. (Overrides the open Day 5 version.)"""
+    """Only Employers can create jobs. employer is always taken from
+    the authenticated user's own profile, never from client input."""
     queryset = Job.objects.all()
     serializer_class = JobSerializer
-    permission_classes = [IsAuthenticated, IsEmployer]
+    permission_classes = [permissions.IsAuthenticated, IsEmployer]
  
     def perform_create(self, serializer):
-        # auto-attach the job to the logged-in employer's profile —
-        # an employer can never post a job "as" someone else
-        employer = Employer.objects.get(user=self.request.user)
+        employer = Employer.objects.get(user=self.request.user, is_deleted=False)
         serializer.save(employer=employer)
+ 
+ 
+class JobUpdateAPIView(generics.UpdateAPIView):
+    """
+    PATCH/PUT a job's fields. Ownership is enforced at the object level
+    (IsOwnerEmployer) — an Employer can only edit THEIR OWN job, not
+    just any job because they happen to hold the Employer role.
+    """
+    queryset = Job.objects.all()
+    serializer_class = JobSerializer
+    permission_classes = [permissions.IsAuthenticated, IsEmployer, IsOwnerEmployer]
+ 
+ 
+class JobStatusToggleAPIView(APIView):
+    """
+    POST /api/jobs/<id>/activate/    -> status = "active"
+    POST /api/jobs/<id>/deactivate/  -> status = "inactive"
+ 
+    Kept as a dedicated action (rather than a generic PATCH to status)
+    so the intent is explicit and auditable, and so future logic
+    (e.g. notifying applicants, logging the change) has one clear
+    place to live per action.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsEmployer, IsOwnerEmployer]
+ 
+    def _get_job_and_check_ownership(self, request, pk):
+        job = get_object_or_404(Job, pk=pk)
+        self.check_object_permissions(request, job)  # applies IsOwnerEmployer manually
+        return job
+ 
+    def post(self, request, pk, action):
+        job = self._get_job_and_check_ownership(request, pk)
+ 
+        if action == "activate":
+            job.status = "active"
+        elif action == "deactivate":
+            job.status = "inactive"
+        else:
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        job.save(update_fields=["status", "updated_at"])
+        return Response({"id": job.id, "title": job.title, "status": job.status})
  
  
 class JobDeleteAPIView(generics.DestroyAPIView):

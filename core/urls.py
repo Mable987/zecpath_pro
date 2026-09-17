@@ -7,6 +7,11 @@ urlpatterns = [
     path("api/jobs/create/", JobCreateAPIView.as_view(), name="job_create_api"),
     path("api/jobs/<int:pk>/delete/", JobDeleteAPIView.as_view(), name="job_delete_api"),
     path("api/jobs/<int:job_id>/apply/", ApplyToJobAPIView.as_view(), name="job_apply_api"),
+    path("api/jobs/<int:pk>/edit/", JobUpdateAPIView.as_view(), name="job_edit"),
+    path("api/jobs/<int:pk>/activate/", JobStatusToggleAPIView.as_view(),
+         {"action": "activate"}, name="job_activate"),
+    path("api/jobs/<int:pk>/deactivate/", JobStatusToggleAPIView.as_view(),
+         {"action": "deactivate"}, name="job_deactivate"),
 
     path("api/test/", UserTestAPIView.as_view(), name="user_test_api"),
     path("api/signup/", SignupView.as_view(), name="signup_api"),
