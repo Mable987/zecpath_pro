@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from rest_framework.response import Response
 from core.serializers import *
 from rest_framework.views import APIView
-
+from core.pagination import JobFeedCursorPagination
 from core.services.auth_service import register_user
 from .models import *
 from rest_framework import status, permissions, generics
@@ -429,4 +429,67 @@ class ResumeUploadView(APIView):
         candidate.resume.delete(save=False)
         candidate.resume = None
         candidate.save(update_fields=["resume", "updated_at"])
-        return Response({"detail": "Resume removed."}, status=status.HTTP_204_NO_CONTENT)            
+        return Response({"detail": "Resume removed."}, status=status.HTTP_204_NO_CONTENT)     
+    
+class PublicJobListAPIView(generics.ListAPIView):
+    """
+    GET /api/public/jobs/?skills=python&location=remote&job_type=full_time
+        &min_salary=40000&max_salary=90000&search=django&ordering=-posted_at
+ 
+    All active jobs, publicly browsable (no login required) — this is
+    the core marketplace discovery endpoint. Cursor-paginated for
+    infinite-scroll on a candidate-facing feed.
+    """
+    serializer_class = JobSerializer
+    permission_classes = [permissions.AllowAny]
+    pagination_class = JobFeedCursorPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = JobFilter
+    search_fields = ["title", "description", "skills"]
+    ordering_fields = ["posted_at", "salary_min", "salary_max"]
+    ordering = ["-posted_at"]
+ 
+    def get_queryset(self):
+        # select_related("employer") — same N+1 prevention as Day 14,
+        # since JobSerializer includes the employer id/relation.
+        return Job.objects.select_related("employer").filter(status="active")
+ 
+ 
+class FeaturedJobListAPIView(generics.ListAPIView):
+    """
+    GET /api/public/jobs/featured/
+ 
+    A smaller, curated list — active AND featured jobs. Uses regular
+    page-number pagination (Day 14's default) rather than cursor,
+    since a "featured" section is typically a short, static-ish list
+    rather than an infinite feed.
+    """
+    serializer_class = JobSerializer
+    permission_classes = [permissions.AllowAny]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = JobFilter
+    search_fields = ["title", "description", "skills"]
+ 
+    def get_queryset(self):
+        return Job.objects.select_related("employer").filter(
+            status="active", featured=True
+        )
+ 
+ 
+class LatestJobListAPIView(generics.ListAPIView):
+    """
+    GET /api/public/jobs/latest/
+ 
+    The N most recent active postings — a simple "what's new" feed,
+    capped rather than paginated since it's meant to show a fixed,
+    small window (e.g. for a homepage widget), not be browsed
+    endlessly.
+    """
+    serializer_class = JobSerializer
+    permission_classes = [permissions.AllowAny]
+    pagination_class = None 
+ 
+    def get_queryset(self):
+        return Job.objects.select_related("employer").filter(
+            status="active"
+        ).order_by("-posted_at")[:10]           

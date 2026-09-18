@@ -156,12 +156,16 @@ class Job(models.Model):
     experience = models.CharField(max_length=20, choices=EXPERIENCE_CHOICES, default="fresher")
     salary_min = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     salary_max = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    location = models.CharField(max_length=100, blank=True)
-    job_type = models.CharField(max_length=20, choices=JOB_TYPE_CHOICES, default="full_time")
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="active")
- 
-    posted_at = models.DateTimeField(auto_now_add=True)
+    location = models.CharField(max_length=100, blank=True,db_index=True)
+    job_type = models.CharField(max_length=20, choices=JOB_TYPE_CHOICES, default="full_time",db_index=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="active",db_index=True)
+    featured = models.BooleanField(default=False, db_index=True)
+    posted_at = models.DateTimeField(auto_now_add=True,db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "-posted_at"], name="job_status_posted_idx"),
+        ]
  
     def __str__(self):
         return f"{self.title} ({self.get_status_display()})"

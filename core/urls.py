@@ -29,4 +29,8 @@ urlpatterns = [
     path("api/admin/candidates/<int:pk>/", AdminCandidateDetailView.as_view(), name="admin_candidate_detail"),
     path("api/profile/candidate/resume/", ResumeUploadView.as_view(), name="resume_upload"),
     path("api/applications/", ApplicationListAPIView.as_view(), name="application_list"),
+    
+    path("api/public/jobs/", PublicJobListAPIView.as_view(), name="public_job_list"),
+    path("api/public/jobs/featured/", FeaturedJobListAPIView.as_view(), name="featured_job_list"),
+    path("api/public/jobs/latest/", LatestJobListAPIView.as_view(), name="latest_job_list"),
 ]
