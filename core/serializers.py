@@ -92,9 +92,12 @@ class CandidateProfileSerializer(serializers.ModelSerializer):
 class ApplicationSerializer(serializers.ModelSerializer):
     job_title = serializers.CharField(source="job.title", read_only=True)
     candidate_name = serializers.CharField(source="candidate.full_name", read_only=True)
+    employer_name = serializers.CharField(source="job.employer.company_name", read_only=True)
  
     class Meta:
         model = Application
-        fields = ["id", "job", "job_title", "candidate", "candidate_name",
-                  "applied_at", "status"]
-        read_only_fields = ["id", "applied_at"]    
+        fields = [
+            "id", "job", "job_title", "employer_name", "candidate", "candidate_name",
+            "resume_snapshot", "applied_at", "status",
+        ]
+        read_only_fields = ["id", "applied_at", "resume_snapshot"] 

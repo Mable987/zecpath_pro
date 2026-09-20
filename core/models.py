@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.auth.base_user import BaseUserManager
 import uuid, os
 from .validators import validate_resume_file
+from django.conf import settings
 
 
 class Role(models.TextChoices):
@@ -182,10 +183,27 @@ class Application(models.Model):
         ("reviewed", "Reviewed"),
         ("rejected", "Rejected"),
     ]
-    candidate = models.ForeignKey(Candidate, on_delete=models.CASCADE, related_name="applications")
-    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="applications")
+    candidate = models.ForeignKey(
+        "Candidate",
+        on_delete=models.CASCADE,
+        related_name="applications",
+    )
+    job = models.ForeignKey(
+        Job,
+        on_delete=models.CASCADE,
+        related_name="applications",
+    )
+    resume_snapshot = models.FileField(upload_to="application_resumes/", blank=True, null=True)
     applied_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+
+    class Meta:
+        unique_together = ("candidate", "job")
+        ordering = ["-applied_at"]
+        indexes = [
+            models.Index(fields=["candidate", "status"]),
+            models.Index(fields=["job", "status"]),
+        ]
 
     def __str__(self):
         return f"{self.candidate.full_name} applied for {self.job.title}"

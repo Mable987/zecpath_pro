@@ -18,6 +18,8 @@ from .validators import validate_resume_file
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from .filters import JobFilter, ApplicationFilter, UserFilter
+import shutil
+from django.core.files.base import ContentFile
 
 
 # Create your views here.
@@ -56,7 +58,7 @@ class ApplicationListAPIView(generics.ListAPIView):
     ordering = ["-applied_at"]
  
     def get_queryset(self):
-        base = Application.objects.select_related("job", "candidate")
+        base = Application.objects.select_related("job", "job__employer", "candidate")
         user = self.request.user
  
         if user.role == "admin":
@@ -66,6 +68,33 @@ class ApplicationListAPIView(generics.ListAPIView):
         else:
             # Employers see applications to THEIR jobs only
             return base.filter(job__employer__user=user)
+
+class ApplicationDetailAPIView(generics.RetrieveAPIView):
+    """
+    GET /api/applications/<pk>/
+ 
+    Single-application lookup with the SAME ownership scoping as
+    ApplicationListAPIView.get_queryset — a candidate, employer, or
+    admin can only ever retrieve an application their role is allowed
+    to see. Requesting an application outside that scope returns 404
+    (via get_object_or_404 on an already-filtered queryset), not 403 —
+    this avoids confirming to an unauthorized user that a given
+    application id even exists.
+    """
+    serializer_class = ApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def get_queryset(self):
+        base = Application.objects.select_related("job", "job__employer", "candidate")
+        user = self.request.user
+ 
+        if user.role == "admin":
+            return base.all()
+        elif user.role == "candidate":
+            return base.filter(candidate__user=user)
+        else:
+            return base.filter(job__employer__user=user)
+        
     
 class JobCreateAPIView(generics.CreateAPIView):
     """Only Employers can create jobs. employer is always taken from
@@ -132,8 +161,14 @@ class JobDeleteAPIView(generics.DestroyAPIView):
 
 
 class ApplyToJobAPIView(APIView):
-    """Only Candidates can apply to jobs."""
-    permission_classes = [IsAuthenticated, IsCandidate]
+    """
+    POST /api/jobs/<job_id>/apply/
+ 
+    Only Candidates can apply (role check). Ownership is implicit —
+    the application is always created FOR the logged-in candidate,
+    never a candidate id supplied by the client.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
  
     def post(self, request, job_id):
         try:
@@ -141,17 +176,52 @@ class ApplyToJobAPIView(APIView):
         except Job.DoesNotExist:
             return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
  
-        candidate = Candidate.objects.get(user=request.user)
+        # Job status check: can't apply to a job that isn't active
+        # (e.g. the employer deactivated or closed it) — checked before
+        # duplicate check so the error message is the most relevant one.
+        if job.status != "active":
+            return Response(
+                {"detail": f"This job is currently '{job.status}' and is not accepting applications."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
  
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+ 
+        # Duplicate prevention: checked in application logic (fast,
+        # friendly error message) AND enforced by the model's
+        # unique_together as a hard backstop against race conditions.
         if Application.objects.filter(candidate=candidate, job=job).exists():
             return Response(
                 {"detail": "You have already applied to this job."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
  
+        if not candidate.resume:
+            return Response(
+                {"detail": "Upload a resume to your profile before applying."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
         application = Application.objects.create(candidate=candidate, job=job)
+ 
+        # Resume binding: copy the candidate's CURRENT resume file into
+        # a snapshot tied to this specific application, so it's frozen
+        # at the moment of applying (see model docstring for why).
+        candidate.resume.open("rb")
+        snapshot_name = os.path.basename(candidate.resume.name)
+        application.resume_snapshot.save(
+            snapshot_name, ContentFile(candidate.resume.read()), save=True
+        )
+        candidate.resume.close()
+ 
         return Response(
-            {"id": application.id, "job": job.title, "status": application.status},
+            {
+                "id": application.id,
+                "job": job.title,
+                "status": application.status,
+                "resume_snapshot": application.resume_snapshot.url,
+                "applied_at": application.applied_at,
+            },
             status=status.HTTP_201_CREATED,
         )
  
