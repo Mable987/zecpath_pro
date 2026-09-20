@@ -4,7 +4,7 @@ from django.contrib.auth.base_user import BaseUserManager
 import uuid, os
 from .validators import validate_resume_file
 from django.conf import settings
-
+from .workflow import APPLICATION_STATUS_CHOICES, STATUS_APPLIED
 
 class Role(models.TextChoices):
     """Role constants — single source of truth for valid roles."""
@@ -178,11 +178,7 @@ class Job(models.Model):
                 raise ValidationError("salary_min cannot be greater than salary_max.")
             
 class Application(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("reviewed", "Reviewed"),
-        ("rejected", "Rejected"),
-    ]
+    STATUS_CHOICES = APPLICATION_STATUS_CHOICES
     candidate = models.ForeignKey(
         "Candidate",
         on_delete=models.CASCADE,
@@ -195,8 +191,7 @@ class Application(models.Model):
     )
     resume_snapshot = models.FileField(upload_to="application_resumes/", blank=True, null=True)
     applied_at = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
-
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_APPLIED)
     class Meta:
         unique_together = ("candidate", "job")
         ordering = ["-applied_at"]
@@ -207,4 +202,29 @@ class Application(models.Model):
 
     def __str__(self):
         return f"{self.candidate.full_name} applied for {self.job.title}"
+
+class ApplicationStatusLog(models.Model):
+    """
+    One row per status change on an Application — the Day 19 audit
+    trail. Immutable by design: nothing ever updates or deletes a log
+    row, it only records what happened and when.
+    """
+    application = models.ForeignKey(
+        Application, on_delete=models.CASCADE, related_name="status_logs"
+    )
+    from_status = models.CharField(max_length=30, blank=True)
+    to_status = models.CharField(max_length=30)
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="application_status_changes",
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-changed_at"]
+
+    def __str__(self):
+        return f"Application #{self.application_id}: {self.from_status} -> {self.to_status}"    
     

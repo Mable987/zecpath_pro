@@ -20,6 +20,9 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from .filters import JobFilter, ApplicationFilter, UserFilter
 import shutil
 from django.core.files.base import ContentFile
+from django.db import transaction
+from rest_framework.exceptions import NotFound
+from .workflow import validate_transition, ACTION_TO_STATUS
 
 
 # Create your views here.
@@ -562,4 +565,81 @@ class LatestJobListAPIView(generics.ListAPIView):
     def get_queryset(self):
         return Job.objects.select_related("employer").filter(
             status="active"
-        ).order_by("-posted_at")[:10]           
+        ).order_by("-posted_at")[:10]          
+
+class EmployerApplicationStatusAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def post(self, request, pk, action):
+        application = get_object_or_404(
+            Application.objects.select_related("job", "job__employer", "candidate"),
+            pk=pk,
+        )
+ 
+        user = request.user
+        is_owner_employer = (
+            user.role == "employer" and application.job.employer.user_id == user.id
+        )
+        is_admin = user.role == "admin"
+        if not (is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        target_status = ACTION_TO_STATUS.get(action)
+        if target_status is None:
+            return Response(
+                {"detail": f"Invalid action '{action}'. Allowed: {list(ACTION_TO_STATUS)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        try:
+            validate_transition(application.status, target_status)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        with transaction.atomic():
+            ApplicationStatusLog.objects.create(
+                application=application,
+                from_status=application.status,
+                to_status=target_status,
+                changed_by=user,
+            )
+            application.status = target_status
+            application.save(update_fields=["status"])
+ 
+        return Response(
+            {
+                "id": application.id,
+                "job": application.job.title,
+                "candidate": application.candidate.full_name,
+                "status": application.status,
+            },
+            status=status.HTTP_200_OK,
+        )
+ 
+ 
+class ApplicationStatusHistoryAPIView(generics.ListAPIView):
+    """
+    GET /api/applications/<id>/history/
+ 
+    Full audit trail for one application, newest first. Same three-way
+    ownership rule as ApplicationDetailAPIView: the candidate who owns
+    it, the employer who owns the job, or Admin.
+    """
+    serializer_class = ApplicationStatusLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def get_queryset(self):
+        application = get_object_or_404(
+            Application.objects.select_related("job__employer", "candidate"),
+            pk=self.kwargs["pk"],
+        )
+        user = self.request.user
+ 
+        is_owner_candidate = application.candidate.user_id == user.id
+        is_owner_employer = application.job.employer.user_id == user.id
+        is_admin = user.role == "admin"
+ 
+        if not (is_owner_candidate or is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        return application.status_logs.select_related("changed_by")         

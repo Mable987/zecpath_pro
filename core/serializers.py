@@ -101,3 +101,11 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "resume_snapshot", "applied_at", "status",
         ]
         read_only_fields = ["id", "applied_at", "resume_snapshot"] 
+        
+class ApplicationStatusLogSerializer(serializers.ModelSerializer):
+    changed_by_email = serializers.CharField(source="changed_by.email", read_only=True)
+ 
+    class Meta:
+        model = ApplicationStatusLog
+        fields = ["id", "from_status", "to_status", "changed_by", "changed_by_email", "changed_at"]
+        read_only_fields = fields        

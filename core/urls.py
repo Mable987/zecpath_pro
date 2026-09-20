@@ -30,6 +30,10 @@ urlpatterns = [
     path("api/profile/candidate/resume/", ResumeUploadView.as_view(), name="resume_upload"),
     path("api/applications/", ApplicationListAPIView.as_view(), name="application_list"),
     path("api/applications/<int:pk>/", ApplicationDetailAPIView.as_view(), name="application_detail"),
+    path("api/applications/<int:pk>/status/<str:action>/",
+     EmployerApplicationStatusAPIView.as_view(), name="application_status_update"),
+    path("api/applications/<int:pk>/history/",
+     ApplicationStatusHistoryAPIView.as_view(), name="application_status_history"),
     
     path("api/public/jobs/", PublicJobListAPIView.as_view(), name="public_job_list"),
     path("api/public/jobs/featured/", FeaturedJobListAPIView.as_view(), name="featured_job_list"),
