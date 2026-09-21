@@ -1,12 +1,3 @@
-"""
-core/workflow.py
-
-Central definition of the ATS status state machine: the five pipeline
-stages, which stage can move to which next, and which stages are
-terminal ("locked") — once an application reaches one, no further
-status change is accepted from anyone.
-"""
-
 STATUS_APPLIED = "applied"
 STATUS_SHORTLISTED = "shortlisted"
 STATUS_INTERVIEW_SCHEDULED = "interview_scheduled"

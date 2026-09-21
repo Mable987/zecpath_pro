@@ -22,7 +22,7 @@ import shutil
 from django.core.files.base import ContentFile
 from django.db import transaction
 from rest_framework.exceptions import NotFound
-from .workflow import validate_transition, ACTION_TO_STATUS
+from .workflow import validate_transition, ACTION_TO_STATUS, STATUS_SHORTLISTED, STATUS_INTERVIEW_SCHEDULED, STATUS_SELECTED
 
 
 # Create your views here.
@@ -123,15 +123,6 @@ class JobUpdateAPIView(generics.UpdateAPIView):
  
  
 class JobStatusToggleAPIView(APIView):
-    """
-    POST /api/jobs/<id>/activate/    -> status = "active"
-    POST /api/jobs/<id>/deactivate/  -> status = "inactive"
- 
-    Kept as a dedicated action (rather than a generic PATCH to status)
-    so the intent is explicit and auditable, and so future logic
-    (e.g. notifying applicants, logging the change) has one clear
-    place to live per action.
-    """
     permission_classes = [permissions.IsAuthenticated, IsEmployer, IsOwnerEmployer]
  
     def _get_job_and_check_ownership(self, request, pk):
@@ -146,6 +137,8 @@ class JobStatusToggleAPIView(APIView):
             job.status = "active"
         elif action == "deactivate":
             job.status = "inactive"
+        elif action == "close":
+            job.status = "closed"    
         else:
             return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
  
@@ -642,4 +635,127 @@ class ApplicationStatusHistoryAPIView(generics.ListAPIView):
         if not (is_owner_candidate or is_owner_employer or is_admin):
             raise NotFound()
  
-        return application.status_logs.select_related("changed_by")         
+        return application.status_logs.select_related("changed_by")   
+
+class EmployerJobListAPIView(generics.ListAPIView):
+    serializer_class = JobSerializer
+    permission_classes = [permissions.IsAuthenticated, IsEmployer]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = JobFilter
+    search_fields = ["title", "description", "skills"]
+    ordering_fields = ["posted_at", "title"]
+    ordering = ["-posted_at"]
+ 
+    def get_queryset(self):
+        return Job.objects.select_related("employer").filter(
+            employer__user=self.request.user
+        )          
+
+class JobApplicantsAPIView(generics.ListAPIView):
+    serializer_class = ApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated, IsEmployer, IsOwnerEmployer]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = ApplicationFilter
+    search_fields = ["candidate__full_name", "candidate__skills"]
+    ordering_fields = ["applied_at"]
+    ordering = ["-applied_at"]
+ 
+    def get_job(self):
+        job = get_object_or_404(Job, pk=self.kwargs["job_id"])
+        self.check_object_permissions(self.request, job)
+        return job
+ 
+    def get_queryset(self):
+        job = self.get_job()
+        return Application.objects.select_related("candidate", "job").filter(job=job)
+    
+def _status_breakdown(applications):
+    """Current-status counts, e.g. {"applied": 3, "shortlisted": 2, ...}."""
+    return {
+        value: applications.filter(status=value).count()
+        for value, _ in Application.STATUS_CHOICES
+    }
+ 
+ 
+def _shortlist_ratio(applications, total):
+    """
+    'ever_shortlisted' counts an application if it EVER reached
+    Shortlisted/Interview Scheduled/Selected at any point in its
+    audit log — not just its current status. This matters: an
+    applicant who was shortlisted and later rejected should still
+    count toward "did we shortlist them", since that's a screening-
+    quality metric, not a snapshot of where they are right now.
+    """
+    ever_shortlisted = applications.filter(
+        status_logs__to_status__in=[
+            STATUS_SHORTLISTED, STATUS_INTERVIEW_SCHEDULED, STATUS_SELECTED
+        ]
+    ).distinct().count()
+    ratio = round(ever_shortlisted / total, 2) if total else 0.0
+    return ever_shortlisted, ratio
+ 
+ 
+class JobAnalyticsAPIView(APIView):
+    """
+    GET /api/jobs/<job_id>/analytics/
+ 
+    Application counts and shortlist ratio for ONE job. Ownership
+    enforced the same manual way as JobApplicantsAPIView.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsEmployer, IsOwnerEmployer]
+ 
+    def get(self, request, job_id):
+        job = get_object_or_404(Job, pk=job_id)
+        self.check_object_permissions(request, job)
+ 
+        applications = job.applications.all()
+        total_applications = applications.count()
+        ever_shortlisted, shortlist_ratio = _shortlist_ratio(applications, total_applications)
+ 
+        return Response({
+            "job_id": job.id,
+            "title": job.title,
+            "total_applications": total_applications,
+            "status_breakdown": _status_breakdown(applications),
+            "ever_shortlisted": ever_shortlisted,
+            "shortlist_ratio": shortlist_ratio,
+        })
+ 
+ 
+class EmployerDashboardAnalyticsAPIView(APIView):
+    """
+    GET /api/employer/dashboard/
+ 
+    Aggregate analytics across ALL of the requesting employer's own
+    jobs — total job counts, total applications, an overall shortlist
+    ratio, and a per-job breakdown for the dashboard's summary panel.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsEmployer]
+ 
+    def get(self, request):
+        employer = Employer.objects.get(user=request.user, is_deleted=False)
+        jobs = Job.objects.filter(employer=employer)
+        applications = Application.objects.filter(job__employer=employer)
+ 
+        total_applications = applications.count()
+        ever_shortlisted, shortlist_ratio = _shortlist_ratio(applications, total_applications)
+ 
+        per_job = [
+            {
+                "job_id": job.id,
+                "title": job.title,
+                "status": job.status,
+                "application_count": job.applications.count(),
+            }
+            for job in jobs
+        ]
+ 
+        return Response({
+            "total_jobs": jobs.count(),
+            "active_jobs": jobs.filter(status="active").count(),
+            "total_applications": total_applications,
+            "status_breakdown": _status_breakdown(applications),
+            "ever_shortlisted": ever_shortlisted,
+            "shortlist_ratio": shortlist_ratio,
+            "jobs": per_job,
+        })            

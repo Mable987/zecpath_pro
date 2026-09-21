@@ -12,6 +12,12 @@ urlpatterns = [
          {"action": "activate"}, name="job_activate"),
     path("api/jobs/<int:pk>/deactivate/", JobStatusToggleAPIView.as_view(),
          {"action": "deactivate"}, name="job_deactivate"),
+    path("api/employer/jobs/", EmployerJobListAPIView.as_view(), name="employer_job_list"),
+    path("api/jobs/<int:pk>/close/", JobStatusToggleAPIView.as_view(),
+     {"action": "close"}, name="job_close"),
+    path("api/jobs/<int:job_id>/applicants/", JobApplicantsAPIView.as_view(), name="job_applicants"),
+    path("api/jobs/<int:job_id>/analytics/", JobAnalyticsAPIView.as_view(), name="job_analytics"),
+    path("api/employer/dashboard/", EmployerDashboardAnalyticsAPIView.as_view(), name="employer_dashboard"),
 
     path("api/test/", UserTestAPIView.as_view(), name="user_test_api"),
     path("api/signup/", SignupView.as_view(), name="signup_api"),
