@@ -23,6 +23,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from rest_framework.exceptions import NotFound
 from .workflow import validate_transition, ACTION_TO_STATUS, STATUS_SHORTLISTED, STATUS_INTERVIEW_SCHEDULED, STATUS_SELECTED
+from django.db.models import Q
 
 
 # Create your views here.
@@ -543,14 +544,6 @@ class FeaturedJobListAPIView(generics.ListAPIView):
  
  
 class LatestJobListAPIView(generics.ListAPIView):
-    """
-    GET /api/public/jobs/latest/
- 
-    The N most recent active postings — a simple "what's new" feed,
-    capped rather than paginated since it's meant to show a fixed,
-    small window (e.g. for a homepage widget), not be browsed
-    endlessly.
-    """
     serializer_class = JobSerializer
     permission_classes = [permissions.AllowAny]
     pagination_class = None 
@@ -595,6 +588,14 @@ class EmployerApplicationStatusAPIView(APIView):
                 from_status=application.status,
                 to_status=target_status,
                 changed_by=user,
+            )
+            Notification.objects.create(
+                recipient=application.candidate.user,
+                application=application,
+                message=(
+                    f"Your application for '{application.job.title}' is now "
+                    f"'{target_status}'."
+                ),
             )
             application.status = target_status
             application.save(update_fields=["status"])
@@ -758,4 +759,141 @@ class EmployerDashboardAnalyticsAPIView(APIView):
             "ever_shortlisted": ever_shortlisted,
             "shortlist_ratio": shortlist_ratio,
             "jobs": per_job,
-        })            
+        })   
+class SaveJobAPIView(APIView):
+    """
+    POST   /api/jobs/<job_id>/save/   -> bookmark a job
+    DELETE /api/jobs/<job_id>/save/   -> remove the bookmark
+ 
+    Candidate-only. Saving is unrelated to applying — no job-status
+    check here, since bookmarking an inactive/closed job to revisit
+    later is a legitimate use case even though applying to one isn't.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def post(self, request, job_id):
+        job = get_object_or_404(Job, pk=job_id)
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+ 
+        saved, created = SavedJob.objects.get_or_create(candidate=candidate, job=job)
+        if not created:
+            return Response({"detail": "Job already saved."}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        return Response(SavedJobSerializer(saved).data, status=status.HTTP_201_CREATED)
+ 
+    def delete(self, request, job_id):
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+        deleted_count, _ = SavedJob.objects.filter(candidate=candidate, job_id=job_id).delete()
+        if not deleted_count:
+            return Response({"detail": "This job was not saved."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"detail": "Job removed from saved list."}, status=status.HTTP_204_NO_CONTENT)
+ 
+ 
+class SavedJobListAPIView(generics.ListAPIView):
+    """GET /api/candidate/saved-jobs/ — the candidate's own bookmarked jobs."""
+    serializer_class = SavedJobSerializer
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get_queryset(self):
+        candidate = Candidate.objects.get(user=self.request.user, is_deleted=False)
+        return SavedJob.objects.select_related("job", "job__employer").filter(candidate=candidate)
+ 
+ 
+class CandidateInterviewsAPIView(generics.ListAPIView):
+    """
+    GET /api/candidate/interviews/
+ 
+    Convenience view for the dashboard's "Interview status" panel: the
+    candidate's own applications currently at the interview_scheduled
+    stage. 
+    """
+    serializer_class = ApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get_queryset(self):
+        candidate = Candidate.objects.get(user=self.request.user, is_deleted=False)
+        return Application.objects.select_related("job", "job__employer").filter(
+            candidate=candidate, status=STATUS_INTERVIEW_SCHEDULED
+        )
+       
+class RecommendedJobsAPIView(generics.ListAPIView):
+    """
+    GET /api/candidate/recommended-jobs/
+ 
+    Basic skill-based matching: splits the candidate's comma-separated
+    `skills` text into keywords, keeps active jobs whose `skills` field
+    contains at least one keyword, and ranks results by how many
+    keywords match. Jobs already applied to are excluded.
+ 
+    Deliberately simple — substring matching in Python, no ML/embedding
+    similarity — matching the Day 21 scope of "Recommendation logic
+    (basic)". A candidate with no skills on file gets the newest active
+    jobs instead of an empty list.
+    """
+    serializer_class = JobSerializer
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get_queryset(self):
+        candidate = Candidate.objects.get(user=self.request.user, is_deleted=False)
+        keywords = [k.strip().lower() for k in candidate.skills.split(",") if k.strip()]
+ 
+        applied_job_ids = Application.objects.filter(candidate=candidate).values_list("job_id", flat=True)
+        base = Job.objects.select_related("employer").filter(status="active").exclude(id__in=applied_job_ids)
+ 
+        if not keywords:
+            return base.order_by("-posted_at")
+ 
+        keyword_filter = Q()
+        for kw in keywords:
+            keyword_filter |= Q(skills__icontains=kw)
+        matched = list(base.filter(keyword_filter))
+ 
+        def match_count(job):
+            job_skills = job.skills.lower()
+            return sum(1 for kw in keywords if kw in job_skills)
+ 
+        matched.sort(key=match_count, reverse=True)
+        return matched       
+   
+class CandidateNotificationListAPIView(generics.ListAPIView):
+    """GET /api/candidate/notifications/ — newest first, own notifications only."""
+    serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get_queryset(self):
+        return Notification.objects.filter(recipient=self.request.user)
+ 
+ 
+class MarkNotificationReadAPIView(APIView):
+    """
+    POST /api/candidate/notifications/<id>/read/
+ 
+    Ownership enforced by filtering on recipient in the same query
+    that fetches the object — a notification belonging to someone else
+    returns 404, it never confirms whose it actually is.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def post(self, request, pk):
+        notification = get_object_or_404(Notification, pk=pk, recipient=request.user)
+        notification.is_read = True
+        notification.save(update_fields=["is_read"])
+        return Response({"id": notification.id, "is_read": True})   
+    
+class CandidateDashboardAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get(self, request):
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+        applications = Application.objects.filter(candidate=candidate)
+ 
+        return Response({
+            "applied_jobs": applications.count(),
+            "saved_jobs": SavedJob.objects.filter(candidate=candidate).count(),
+            "interviews_scheduled": applications.filter(status=STATUS_INTERVIEW_SCHEDULED).count(),
+            "unread_notifications": Notification.objects.filter(
+                recipient=request.user, is_read=False
+            ).count(),
+        })     
+        
+                 

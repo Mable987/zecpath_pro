@@ -228,3 +228,48 @@ class ApplicationStatusLog(models.Model):
     def __str__(self):
         return f"Application #{self.application_id}: {self.from_status} -> {self.to_status}"    
     
+class SavedJob(models.Model):
+    """
+    A candidate bookmarking a job — independent of applying. A
+    candidate can save a job without ever applying, and can apply
+    without ever saving it first.
+    """
+    candidate = models.ForeignKey(
+        "Candidate", on_delete=models.CASCADE, related_name="saved_jobs"
+    )
+    job = models.ForeignKey(
+        "Job", on_delete=models.CASCADE, related_name="saved_by"
+    )
+    saved_at = models.DateTimeField(auto_now_add=True)
+ 
+    class Meta:
+        unique_together = ("candidate", "job")
+        ordering = ["-saved_at"]
+ 
+    def __str__(self):
+        return f"{self.candidate.full_name} saved {self.job.title}"
+ 
+ 
+class Notification(models.Model):
+    """
+    A simple in-app notification, created automatically whenever an
+    Application's status changes (see EmployerApplicationStatusAPIView
+    in views.py) — the "status notifications" piece of Day 21.
+    """
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications"
+    )
+    application = models.ForeignKey(
+        "Application", on_delete=models.CASCADE, related_name="notifications",
+        null=True, blank=True,
+    )
+    message = models.CharField(max_length=255)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+ 
+    class Meta:
+        ordering = ["-created_at"]
+ 
+    def __str__(self):
+        return f"To {self.recipient.email}: {self.message}"
+    

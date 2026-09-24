@@ -108,4 +108,19 @@ class ApplicationStatusLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = ApplicationStatusLog
         fields = ["id", "from_status", "to_status", "changed_by", "changed_by_email", "changed_at"]
-        read_only_fields = fields        
+        read_only_fields = fields     
+       
+class SavedJobSerializer(serializers.ModelSerializer):
+    job_detail = JobSerializer(source="job", read_only=True)
+ 
+    class Meta:
+        model = SavedJob
+        fields = ["id", "job", "job_detail", "saved_at"]
+        read_only_fields = ["id", "saved_at"]
+ 
+ 
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ["id", "application", "message", "is_read", "created_at"]
+        read_only_fields = ["id", "application", "message", "created_at"]           

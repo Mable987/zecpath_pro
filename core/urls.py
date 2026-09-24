@@ -41,7 +41,14 @@ urlpatterns = [
     path("api/applications/<int:pk>/history/",
      ApplicationStatusHistoryAPIView.as_view(), name="application_status_history"),
     
-    path("api/public/jobs/", PublicJobListAPIView.as_view(), name="public_job_list"),
-    path("api/public/jobs/featured/", FeaturedJobListAPIView.as_view(), name="featured_job_list"),
-    path("api/public/jobs/latest/", LatestJobListAPIView.as_view(), name="latest_job_list"),
+     path("api/public/jobs/", PublicJobListAPIView.as_view(), name="public_job_list"),
+     path("api/public/jobs/featured/", FeaturedJobListAPIView.as_view(), name="featured_job_list"),
+     path("api/public/jobs/latest/", LatestJobListAPIView.as_view(), name="latest_job_list"),
+     path("api/jobs/<int:job_id>/save/", SaveJobAPIView.as_view(), name="job_save"),
+     path("api/candidate/saved-jobs/", SavedJobListAPIView.as_view(), name="candidate_saved_jobs"),
+     path("api/candidate/interviews/", CandidateInterviewsAPIView.as_view(), name="candidate_interviews"),
+     path("api/candidate/recommended-jobs/", RecommendedJobsAPIView.as_view(), name="candidate_recommended_jobs"),
+     path("api/candidate/notifications/", CandidateNotificationListAPIView.as_view(), name="candidate_notifications"),
+     path("api/candidate/notifications/<int:pk>/read/", MarkNotificationReadAPIView.as_view(), name="candidate_notification_read"),
+     path("api/candidate/dashboard/", CandidateDashboardAPIView.as_view(), name="candidate_dashboard"),
 ]
