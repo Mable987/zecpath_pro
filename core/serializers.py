@@ -124,3 +124,11 @@ class NotificationSerializer(serializers.ModelSerializer):
         model = Notification
         fields = ["id", "application", "message", "is_read", "created_at"]
         read_only_fields = ["id", "application", "message", "created_at"]           
+     
+class AdminActionLogSerializer(serializers.ModelSerializer):
+    admin_email = serializers.CharField(source="admin.email", read_only=True)
+ 
+    class Meta:
+        model = AdminActionLog
+        fields = ["id", "admin", "admin_email", "action", "target_type", "target_id", "details", "created_at"]
+        read_only_fields = fields        

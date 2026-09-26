@@ -48,14 +48,16 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     is_active = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
-    is_staff = models.BooleanField(default=False)  # required for admin access
+    is_staff = models.BooleanField(default=False) 
+    is_flagged = models.BooleanField(default=False)
+    flag_reason = models.CharField(max_length=255, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = UserManager()
 
-    USERNAME_FIELD = "email"      # login with email, not username
+    USERNAME_FIELD = "email"      
     REQUIRED_FIELDS = []          # no extra fields required for createsuperuser
 
     def __str__(self):
@@ -74,7 +76,7 @@ class Employer(models.Model):
     user = models.OneToOneField("User", on_delete=models.CASCADE)
     company_name = models.CharField(max_length=150)
     company_website = models.URLField(blank=True, null=True)
-    domain = models.CharField(max_length=100, blank=True)               # e.g. "Fintech", "Healthcare"
+    domain = models.CharField(max_length=100, blank=True)              
     size = models.CharField(max_length=20, choices=SIZE_CHOICES, blank=True)
     is_verified = models.BooleanField(default=False)                    # company verification status
  
@@ -272,4 +274,20 @@ class Notification(models.Model):
  
     def __str__(self):
         return f"To {self.recipient.email}: {self.message}"
-    
+   
+class AdminActionLog(models.Model):
+    admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="admin_actions",
+    )
+    action = models.CharField(max_length=50)
+    target_type = models.CharField(max_length=50)
+    target_id = models.PositiveIntegerField()
+    details = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+ 
+    class Meta:
+        ordering = ["-created_at"]
+ 
+    def __str__(self):
+        return f"{self.admin}: {self.action} on {self.target_type}#{self.target_id}"    

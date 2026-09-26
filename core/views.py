@@ -23,7 +23,11 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from rest_framework.exceptions import NotFound
 from .workflow import validate_transition, ACTION_TO_STATUS, STATUS_SHORTLISTED, STATUS_INTERVIEW_SCHEDULED, STATUS_SELECTED
-from django.db.models import Q
+from django.db.models import Q, Count    
+from django.utils import timezone
+from datetime import timedelta
+from django.db.models.functions import TruncDate
+from .resume_parser import extract_text, clean_text
 
 
 # Create your views here.
@@ -255,6 +259,7 @@ class AdminDeactivateUserAPIView(APIView):
  
         target.is_active = False
         target.save(update_fields=["is_active"])
+        log_admin_action(request.user, "deactivate_user", "User", target.id, target.email)
         return Response({"detail": f"{target.email} has been deactivated."})
     
 class UserTestAPIView(APIView):
@@ -399,26 +404,24 @@ class AdminEmployerDetailView(APIView):
         serializer = EmployerProfileSerializer(profile, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        log_admin_action(request.user, "update_employer", "Employer", profile.id, str(request.data))
         return Response(serializer.data)
  
     def delete(self, request, pk):
         profile = get_object_or_404(Employer, pk=pk)
         profile.soft_delete()
+        log_admin_action(request.user, "delete_employer", "Employer", profile.id, profile.company_name)
         return Response({"detail": "Employer profile deactivated by admin."}, status=status.HTTP_204_NO_CONTENT)
  
  
 class AdminVerifyEmployerView(APIView):
-    """
-    Admin-only: toggle an Employer's verification status.
-    Separated from the generic update view since is_verified is
-    intentionally read-only on the self-serve EmployerProfileSerializer.
-    """
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
  
     def post(self, request, pk):
         profile = get_object_or_404(Employer, pk=pk)
         profile.is_verified = True
         profile.save(update_fields=["is_verified"])
+        log_admin_action(request.user, "verify_employer", "Employer", profile.id, profile.company_name)
         return Response({"detail": f"{profile.company_name} is now verified."})
  
  
@@ -435,11 +438,13 @@ class AdminCandidateDetailView(APIView):
         serializer = CandidateProfileSerializer(profile, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        log_admin_action(request.user, "update_candidate", "Candidate", profile.id, str(request.data))
         return Response(serializer.data)
  
     def delete(self, request, pk):
         profile = get_object_or_404(Candidate, pk=pk)
         profile.soft_delete()
+        log_admin_action(request.user, "delete_candidate", "Candidate", profile.id, profile.full_name)
         return Response({"detail": "Candidate profile deactivated by admin."}, status=status.HTTP_204_NO_CONTENT) 
     
 class ResumeUploadView(APIView):
@@ -896,4 +901,279 @@ class CandidateDashboardAPIView(APIView):
             ).count(),
         })     
         
-                 
+def log_admin_action(admin_user, action, target_type, target_id, details=""):
+    """Every admin governance/moderation action gets one row here — the
+    Day 22 audit trail. Called from every admin-mutating view below,
+    and should also be added to the EXISTING AdminDeactivateUserAPIView
+    and AdminVerifyEmployerView (see notes at the bottom of this file)."""
+    AdminActionLog.objects.create(
+        admin=admin_user, action=action, target_type=target_type,
+        target_id=target_id, details=details,
+    )
+ 
+ 
+class AdminJobListAPIView(generics.ListAPIView):
+    """
+    GET /api/admin/jobs/?status=active&search=backend
+ 
+    ALL jobs on the platform, any status, any employer — the "Manage
+    job posts" panel. Reuses JobFilter/SearchFilter, same as the
+    public and employer-scoped job lists.
+    """
+    serializer_class = JobSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = JobFilter
+    search_fields = ["title", "description", "skills"]
+    ordering_fields = ["posted_at", "title"]
+    ordering = ["-posted_at"]
+    queryset = Job.objects.select_related("employer")
+ 
+ 
+class AdminJobActionAPIView(APIView):
+    """
+    POST /api/admin/jobs/<id>/activate/
+    POST /api/admin/jobs/<id>/deactivate/
+    POST /api/admin/jobs/<id>/close/
+    POST /api/admin/jobs/<id>/remove/
+ 
+    Admin-only job management. Unlike the Employer-facing
+    JobStatusToggleAPIView, there's no ownership check here — an Admin
+    acts on ANY job, e.g. to remove a spam posting regardless of who
+    created it ("remove" is the Content Moderation "Remove spam jobs"
+    action — a hard delete, not a status change). Every action is
+    logged to AdminActionLog.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    STATUS_ACTIONS = {"activate": "active", "deactivate": "inactive", "close": "closed"}
+ 
+    def post(self, request, pk, action):
+        job = get_object_or_404(Job, pk=pk)
+ 
+        if action == "remove":
+            job_title = job.title
+            job.delete()
+            log_admin_action(request.user, "remove_job", "Job", pk, job_title)
+            return Response({"detail": f"Job '{job_title}' removed."}, status=status.HTTP_204_NO_CONTENT)
+ 
+        if action not in self.STATUS_ACTIONS:
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        job.status = self.STATUS_ACTIONS[action]
+        job.save(update_fields=["status", "updated_at"])
+        log_admin_action(request.user, f"job_{action}", "Job", job.id, job.title)
+        return Response({"id": job.id, "title": job.title, "status": job.status})
+ 
+ 
+class AdminFlagUserAPIView(APIView):
+    """
+    POST /api/admin/users/<user_id>/flag/    body: {"reason": "..."}
+    POST /api/admin/users/<user_id>/unflag/
+ 
+    Flagging is deliberately separate from deactivating: a flagged
+    account can still log in and use the platform normally — it's
+    marked for admin review (e.g. a suspected fake employer or an
+    abusive candidate), not locked out. Blocking access is what
+    AdminDeactivateUserAPIView already does.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def post(self, request, user_id, action):
+        target = get_object_or_404(User, pk=user_id)
+ 
+        if action == "flag":
+            reason = request.data.get("reason", "")
+            target.is_flagged = True
+            target.flag_reason = reason
+            target.save(update_fields=["is_flagged", "flag_reason"])
+            log_admin_action(request.user, "flag_user", "User", target.id, reason)
+        elif action == "unflag":
+            target.is_flagged = False
+            target.flag_reason = ""
+            target.save(update_fields=["is_flagged", "flag_reason"])
+            log_admin_action(request.user, "unflag_user", "User", target.id)
+        else:
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        return Response({
+            "id": target.id, "email": target.email,
+            "is_flagged": target.is_flagged, "flag_reason": target.flag_reason,
+        })        
+   
+class PlatformStatsAPIView(APIView):
+    """
+    GET /api/admin/stats/overview/
+ 
+    High-level platform snapshot: user counts by role, job counts by
+    status, total applications, and how many accounts are currently
+    flagged or deactivated.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def get(self, request):
+        users_by_role = {
+            value: User.objects.filter(role=value).count() for value, _ in Role.choices
+        }
+        jobs_by_status = {
+            value: Job.objects.filter(status=value).count() for value, _ in Job.STATUS_CHOICES
+        }
+        return Response({
+            "total_users": User.objects.count(),
+            "users_by_role": users_by_role,
+            "flagged_users": User.objects.filter(is_flagged=True).count(),
+            "deactivated_users": User.objects.filter(is_active=False).count(),
+            "total_jobs": Job.objects.count(),
+            "jobs_by_status": jobs_by_status,
+            "total_applications": Application.objects.count(),
+        })
+ 
+ 
+class UserGrowthStatsAPIView(APIView):
+    """
+    GET /api/admin/stats/user-growth/?days=30
+ 
+    Daily signup counts for the last N days (default 30) — the series
+    a "user growth" chart would plot.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def get(self, request):
+        days = int(request.query_params.get("days", 30))
+        since = timezone.now() - timedelta(days=days)
+ 
+        rows = (
+            User.objects.filter(created_at__gte=since)
+            .annotate(day=TruncDate("created_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+            .order_by("day")
+        )
+        return Response({
+            "days": days,
+            "growth": [{"date": row["day"], "signups": row["count"]} for row in rows],
+        })
+ 
+ 
+class JobActivityStatsAPIView(APIView):
+    """
+    GET /api/admin/stats/job-activity/?days=30
+ 
+    Daily job-posting counts and daily application counts for the last
+    N days — two series a "job activity" chart would plot side by side.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def get(self, request):
+        days = int(request.query_params.get("days", 30))
+        since = timezone.now() - timedelta(days=days)
+ 
+        jobs_posted = (
+            Job.objects.filter(posted_at__gte=since)
+            .annotate(day=TruncDate("posted_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+            .order_by("day")
+        )
+        applications_received = (
+            Application.objects.filter(applied_at__gte=since)
+            .annotate(day=TruncDate("applied_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+            .order_by("day")
+        )
+        return Response({
+            "days": days,
+            "jobs_posted": [{"date": r["day"], "count": r["count"]} for r in jobs_posted],
+            "applications_received": [{"date": r["day"], "count": r["count"]} for r in applications_received],
+        })
+class AdminActionLogListAPIView(generics.ListAPIView):
+    """
+    GET /api/admin/audit-logs/?action=flag_user&admin=3
+ 
+    Full admin action history, newest first — every governance and
+    moderation action taken on the platform. filterset_fields (rather
+    than a dedicated FilterSet class) is enough here since these are
+    plain exact-match filters, not the range/overlap logic JobFilter
+    needs.
+    """
+    serializer_class = AdminActionLogSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ["action", "target_type", "admin"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+    queryset = AdminActionLog.objects.select_related("admin")                         
+   
+class ResumeParseUploadAPIView(APIView):
+    """
+    POST /api/resume/parse/   (multipart, field name "resume")
+ 
+    The "upload -> parse" pipeline deliverable: accepts a fresh file
+    upload independent of the candidate's saved profile resume,
+    extracts raw text, cleans it, and returns both. Nothing is saved
+    to the database — this is a stateless preprocessing utility.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+    parser_classes = [MultiPartParser, FormParser]
+ 
+    def post(self, request):
+        uploaded_file = request.FILES.get("resume")
+        if not uploaded_file:
+            return Response(
+                {"detail": "No file provided. Attach a file under the 'resume' field."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        try:
+            validate_resume_file(uploaded_file)
+        except DjangoValidationError as e:
+            return Response({"detail": e.messages}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        try:
+            raw_text = extract_text(uploaded_file, uploaded_file.name)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        cleaned = clean_text(raw_text)
+ 
+        return Response({
+            "file_name": uploaded_file.name,
+            "raw_length": len(raw_text),
+            "cleaned_length": len(cleaned),
+            "cleaned_text": cleaned,
+        })
+ 
+ 
+class CandidateResumeParsedTextAPIView(APIView):
+    """
+    GET /api/candidate/resume/parsed-text/
+ 
+    Parses the candidate's ALREADY-uploaded profile resume (from the
+    Day 12 ResumeUploadView) rather than requiring a fresh upload —
+    the natural entry point once a candidate already has a resume on
+    file, feeding straight into later AI-preprocessing steps.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get(self, request):
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+        if not candidate.resume:
+            return Response({"detail": "No resume on file."}, status=status.HTTP_404_NOT_FOUND)
+ 
+        try:
+            candidate.resume.open("rb")
+            raw_text = extract_text(candidate.resume, candidate.resume.name)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            candidate.resume.close()
+ 
+        cleaned = clean_text(raw_text)
+ 
+        return Response({
+            "file_name": candidate.resume.name,
+            "raw_length": len(raw_text),
+            "cleaned_length": len(cleaned),
+            "cleaned_text": cleaned,
+        })    
