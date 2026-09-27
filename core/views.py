@@ -28,6 +28,7 @@ from django.utils import timezone
 from datetime import timedelta
 from django.db.models.functions import TruncDate
 from .resume_parser import extract_text, clean_text
+from .resume_nlp import parse_resume
 
 
 # Create your views here.
@@ -1177,3 +1178,76 @@ class CandidateResumeParsedTextAPIView(APIView):
             "cleaned_length": len(cleaned),
             "cleaned_text": cleaned,
         })    
+       
+class ResumeStructuredParseUploadAPIView(APIView):
+    """
+    POST /api/resume/parse-structured/   (multipart, field name "resume")
+ 
+    The full pipeline: upload -> extract text (Day 23) -> clean it
+    (Day 23) -> run the NLP layer (Day 24) -> return one structured
+    JSON object. Stateless, same as the Day 23 upload endpoint — no
+    database write.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+    parser_classes = [MultiPartParser, FormParser]
+ 
+    def post(self, request):
+        uploaded_file = request.FILES.get("resume")
+        if not uploaded_file:
+            return Response(
+                {"detail": "No file provided. Attach a file under the 'resume' field."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+ 
+        try:
+            validate_resume_file(uploaded_file)
+        except DjangoValidationError as e:
+            return Response({"detail": e.messages}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        try:
+            raw_text = extract_text(uploaded_file, uploaded_file.name)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+ 
+        cleaned = clean_text(raw_text)
+        parsed = parse_resume(cleaned)
+ 
+        return Response({
+            "file_name": uploaded_file.name,
+            "cleaned_length": len(cleaned),
+            **parsed,
+        })
+ 
+ 
+class CandidateResumeStructuredDataAPIView(APIView):
+    """
+    GET /api/candidate/resume/structured-data/
+ 
+    Same NLP pipeline as above, but run on the candidate's already-
+    uploaded profile resume (Day 12) instead of requiring a fresh
+    upload — the "Parsed resume data" deliverable for a candidate who
+    already has a resume on file.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCandidate]
+ 
+    def get(self, request):
+        candidate = Candidate.objects.get(user=request.user, is_deleted=False)
+        if not candidate.resume:
+            return Response({"detail": "No resume on file."}, status=status.HTTP_404_NOT_FOUND)
+ 
+        try:
+            candidate.resume.open("rb")
+            raw_text = extract_text(candidate.resume, candidate.resume.name)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            candidate.resume.close()
+ 
+        cleaned = clean_text(raw_text)
+        parsed = parse_resume(cleaned)
+ 
+        return Response({
+            "file_name": candidate.resume.name,
+            "cleaned_length": len(cleaned),
+            **parsed,
+        })        

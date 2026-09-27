@@ -74,5 +74,9 @@ urlpatterns = [
      
      path("api/resume/parse/", ResumeParseUploadAPIView.as_view(), name="resume_parse_upload"),
      path("api/candidate/resume/parsed-text/", CandidateResumeParsedTextAPIView.as_view(),
-     name="candidate_resume_parsed_text"),
+          name="candidate_resume_parsed_text"),
+     path("api/resume/parse-structured/", ResumeStructuredParseUploadAPIView.as_view(),
+          name="resume_parse_structured_upload"),
+     path("api/candidate/resume/structured-data/", CandidateResumeStructuredDataAPIView.as_view(),
+          name="candidate_resume_structured_data"),
 ]
