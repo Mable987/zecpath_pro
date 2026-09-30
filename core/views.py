@@ -29,6 +29,7 @@ from datetime import timedelta
 from django.db.models.functions import TruncDate
 from .resume_parser import extract_text, clean_text
 from .resume_nlp import parse_resume
+from .ats_scoring import compute_ats_score
 
 
 # Create your views here.
@@ -1251,3 +1252,105 @@ class CandidateResumeStructuredDataAPIView(APIView):
             "cleaned_length": len(cleaned),
             **parsed,
         })        
+        
+class ApplicationScoreAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def _get_application(self, pk):
+        return get_object_or_404(
+            Application.objects.select_related("job", "job__employer", "candidate"), pk=pk
+        )
+ 
+    def get(self, request, pk):
+        application = self._get_application(pk)
+        user = request.user
+        is_owner_candidate = application.candidate.user_id == user.id
+        is_owner_employer = application.job.employer.user_id == user.id
+        is_admin = user.role == "admin"
+        if not (is_owner_candidate or is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        if application.ats_score is None:
+            return Response(
+                {"detail": "This application has not been scored yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+ 
+        return Response({
+            "application_id": application.id,
+            "suitability_percent": application.ats_score,
+            "breakdown": application.ats_score_breakdown,
+            "scored_at": application.ats_scored_at,
+        })
+ 
+    def post(self, request, pk):
+        application = self._get_application(pk)
+        user = request.user
+        is_owner_employer = (
+            user.role == "employer" and application.job.employer.user_id == user.id
+        )
+        is_admin = user.role == "admin"
+        if not (is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        result = compute_ats_score(application.job, application.candidate)
+ 
+        application.ats_score = result["suitability_percent"]
+        application.ats_score_breakdown = result.get("breakdown")
+        application.ats_scored_at = timezone.now()
+        application.save(update_fields=["ats_score", "ats_score_breakdown", "ats_scored_at"])
+ 
+        return Response({
+            "application_id": application.id,
+            "candidate": application.candidate.full_name,
+            "job": application.job.title,
+            **result,
+        })
+ 
+ 
+class RankedCandidatesAPIView(APIView):
+    """
+    GET /api/jobs/<job_id>/ranked-candidates/
+ 
+    Every applicant to one job, ordered by ATS suitability score
+    (highest first). Any application not yet scored is scored on the
+    fly first, so the ranking is always complete rather than silently
+    skipping unscored applicants. Employer (owner) or Admin only.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def get(self, request, job_id):
+        job = get_object_or_404(Job.objects.select_related("employer"), pk=job_id)
+        user = request.user
+        is_owner_employer = user.role == "employer" and job.employer.user_id == user.id
+        is_admin = user.role == "admin"
+        if not (is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        applications = Application.objects.select_related("candidate").filter(job=job)
+ 
+        for application in applications:
+            if application.ats_score is None:
+                result = compute_ats_score(job, application.candidate)
+                application.ats_score = result["suitability_percent"]
+                application.ats_score_breakdown = result.get("breakdown")
+                application.ats_scored_at = timezone.now()
+                application.save(
+                    update_fields=["ats_score", "ats_score_breakdown", "ats_scored_at"]
+                )
+ 
+        ranked = applications.order_by("-ats_score")
+ 
+        return Response({
+            "job_id": job.id,
+            "title": job.title,
+            "ranked_candidates": [
+                {
+                    "application_id": app.id,
+                    "candidate": app.candidate.full_name,
+                    "status": app.status,
+                    "suitability_percent": app.ats_score,
+                }
+                for app in ranked
+            ],
+        })    

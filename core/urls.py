@@ -79,4 +79,6 @@ urlpatterns = [
           name="resume_parse_structured_upload"),
      path("api/candidate/resume/structured-data/", CandidateResumeStructuredDataAPIView.as_view(),
           name="candidate_resume_structured_data"),
-]
+     path("api/applications/<int:pk>/score/", ApplicationScoreAPIView.as_view(), name="application_score"),
+     path("api/jobs/<int:job_id>/ranked-candidates/", RankedCandidatesAPIView.as_view(), name="job_ranked_candidates"),
+]    

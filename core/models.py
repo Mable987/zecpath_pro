@@ -157,6 +157,7 @@ class Job(models.Model):
     description = models.TextField()
     skills = models.TextField(help_text="Comma-separated list, e.g. 'Python, Django, SQL'")
     experience = models.CharField(max_length=20, choices=EXPERIENCE_CHOICES, default="fresher")
+    required_education = models.CharField( max_length=20, choices=Candidate.EDUCATION_CHOICES, blank=True, default="")
     salary_min = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     salary_max = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     location = models.CharField(max_length=100, blank=True,db_index=True)
@@ -194,6 +195,9 @@ class Application(models.Model):
     resume_snapshot = models.FileField(upload_to="application_resumes/", blank=True, null=True)
     applied_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_APPLIED)
+    ats_score = models.FloatField(null=True, blank=True)
+    ats_score_breakdown = models.JSONField(null=True, blank=True)
+    ats_scored_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         unique_together = ("candidate", "job")
         ordering = ["-applied_at"]
