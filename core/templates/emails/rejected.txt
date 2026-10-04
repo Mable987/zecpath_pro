@@ -1,0 +1,8 @@
+Hi {{ candidate_name }},
+
+Thank you for your interest in the {{ job_title }} position at {{ company_name }}, and for taking the time to apply.
+
+After careful review, we've decided to move forward with other candidates at this time. We encourage you to apply for future openings that match your skills.
+
+Wishing you the best in your job search,
+The {{ company_name }} Hiring Team

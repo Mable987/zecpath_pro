@@ -54,6 +54,7 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="127.0.0.1,localhost", cast=lambda v: [s.strip() for s in v.split(",")])
 
 
+DEFAULT_FROM_EMAIL = "Zecpath Jobs <noreply@zecpath.local>"
 # Application definition
 
 INSTALLED_APPS = [

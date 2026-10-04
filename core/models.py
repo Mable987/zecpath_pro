@@ -158,6 +158,9 @@ class Job(models.Model):
     skills = models.TextField(help_text="Comma-separated list, e.g. 'Python, Django, SQL'")
     experience = models.CharField(max_length=20, choices=EXPERIENCE_CHOICES, default="fresher")
     required_education = models.CharField( max_length=20, choices=Candidate.EDUCATION_CHOICES, blank=True, default="")
+    auto_processing_enabled = models.BooleanField(default=True)
+    auto_shortlist_threshold = models.FloatField(null=True, blank=True)
+    auto_reject_threshold = models.FloatField(null=True, blank=True)
     salary_min = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     salary_max = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     location = models.CharField(max_length=100, blank=True,db_index=True)
@@ -198,6 +201,8 @@ class Application(models.Model):
     ats_score = models.FloatField(null=True, blank=True)
     ats_score_breakdown = models.JSONField(null=True, blank=True)
     ats_scored_at = models.DateTimeField(null=True, blank=True)
+    auto_processing_excluded = models.BooleanField(default=False)
+    auto_processed_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         unique_together = ("candidate", "job")
         ordering = ["-applied_at"]
@@ -295,3 +300,45 @@ class AdminActionLog(models.Model):
  
     def __str__(self):
         return f"{self.admin}: {self.action} on {self.target_type}#{self.target_id}"    
+
+class EmailLog(models.Model):
+    """
+    Both the OUTBOUND EMAIL QUEUE and the DELIVERY LOG in one table:
+    a row is created the instant an email is triggered (PENDING,
+    nothing sent yet), and the same row is updated in place as it
+    moves toward SENT or FAILED_PERMANENTLY. This is what makes
+    sending asynchronous — the request that triggers an email (e.g.
+    applying to a job) only ever has to write one fast DB row, never
+    wait on an SMTP connection.
+    """
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed (will retry)"
+        FAILED_PERMANENTLY = "failed_permanently", "Failed Permanently"
+ 
+    recipient_email = models.EmailField()
+    recipient_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="email_logs",
+    )
+    event_type = models.CharField(max_length=50)  # application_submitted | shortlisted | rejected
+    application = models.ForeignKey(
+        "Application", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="email_logs",
+    )
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=3)
+    last_error = models.TextField(blank=True)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+ 
+    class Meta:
+        ordering = ["-created_at"]
+ 
+    def __str__(self):
+        return f"{self.event_type} -> {self.recipient_email} [{self.status}]"    

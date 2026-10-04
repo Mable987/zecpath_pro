@@ -1,0 +1,8 @@
+Hi {{ candidate_name }},
+
+Great news! You've been shortlisted for the {{ job_title }} position at {{ company_name }}.
+
+The hiring team will be in touch soon with next steps.
+
+Congratulations,
+The {{ company_name }} Hiring Team

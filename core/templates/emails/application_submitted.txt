@@ -1,0 +1,8 @@
+Hi {{ candidate_name }},
+
+Thank you for applying to the {{ job_title }} position at {{ company_name }}.
+
+Your application has been received and is now under review. We'll notify you as soon as there's an update on your status.
+
+Best of luck,
+The {{ company_name }} Hiring Team

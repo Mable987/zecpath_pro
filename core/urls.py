@@ -52,8 +52,10 @@ urlpatterns = [
      path("api/admin/stats/overview/", PlatformStatsAPIView.as_view(), name="admin_stats_overview"),
      path("api/admin/stats/user-growth/", UserGrowthStatsAPIView.as_view(), name="admin_stats_user_growth"),
      path("api/admin/stats/job-activity/", JobActivityStatsAPIView.as_view(), name="admin_stats_job_activity"),
- 
      path("api/admin/audit-logs/", AdminActionLogListAPIView.as_view(), name="admin_audit_logs"),
+     path("api/admin/email-logs/", EmailLogListAPIView.as_view(), name="admin_email_logs"),
+     path("api/admin/send-pending-emails/", SendPendingEmailsAPIView.as_view(), name="admin_send_pending_emails"),
+
      path("api/applications/", ApplicationListAPIView.as_view(), name="application_list"),
      path("api/applications/<int:pk>/", ApplicationDetailAPIView.as_view(), name="application_detail"),
      path("api/applications/<int:pk>/status/<str:action>/",
@@ -81,4 +83,15 @@ urlpatterns = [
           name="candidate_resume_structured_data"),
      path("api/applications/<int:pk>/score/", ApplicationScoreAPIView.as_view(), name="application_score"),
      path("api/jobs/<int:job_id>/ranked-candidates/", RankedCandidatesAPIView.as_view(), name="job_ranked_candidates"),
+     
+     path("api/jobs/<int:job_id>/run-auto-shortlisting/",
+          RunAutoShortlistingForJobAPIView.as_view(), name="job_run_auto_shortlisting"),
+     path("api/admin/run-auto-shortlisting/",
+          RunAutoShortlistingPlatformAPIView.as_view(), name="admin_run_auto_shortlisting"),
+     path("api/applications/<int:pk>/exclude-from-automation/",
+          ApplicationAutomationOverrideAPIView.as_view(), {"action": "exclude"},
+          name="application_exclude_automation"),
+     path("api/applications/<int:pk>/include-in-automation/",
+          ApplicationAutomationOverrideAPIView.as_view(), {"action": "include"},
+          name="application_include_automation"),
 ]    

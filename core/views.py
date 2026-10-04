@@ -1,6 +1,7 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
 from rest_framework.response import Response
+from core.email_service import queue_email
 from core.serializers import *
 from rest_framework.views import APIView
 from core.pagination import JobFeedCursorPagination
@@ -30,6 +31,7 @@ from django.db.models.functions import TruncDate
 from .resume_parser import extract_text, clean_text
 from .resume_nlp import parse_resume
 from .ats_scoring import compute_ats_score
+from .automation import apply_status_change, run_auto_shortlisting_for_job, run_auto_shortlisting_platform_wide
 
 
 # Create your views here.
@@ -179,9 +181,6 @@ class ApplyToJobAPIView(APIView):
         except Job.DoesNotExist:
             return Response({"detail": "Job not found."}, status=status.HTTP_404_NOT_FOUND)
  
-        # Job status check: can't apply to a job that isn't active
-        # (e.g. the employer deactivated or closed it) — checked before
-        # duplicate check so the error message is the most relevant one.
         if job.status != "active":
             return Response(
                 {"detail": f"This job is currently '{job.status}' and is not accepting applications."},
@@ -216,6 +215,7 @@ class ApplyToJobAPIView(APIView):
             snapshot_name, ContentFile(candidate.resume.read()), save=True
         )
         candidate.resume.close()
+        queue_email("application_submitted", application)
  
         return Response(
             {
@@ -561,6 +561,17 @@ class LatestJobListAPIView(generics.ListAPIView):
         ).order_by("-posted_at")[:10]          
 
 class EmployerApplicationStatusAPIView(APIView):
+    """
+    POST /api/applications/<id>/status/<action>/
+ 
+    action in {"shortlist", "schedule-interview", "select", "reject"}.
+    Ownership: only the Employer who owns the job, or Admin.
+    Status change, audit log, candidate notification, and email
+    queueing all happen inside the shared apply_status_change() helper
+    (core/automation.py) — the SAME function the Day 26 automation
+    engine uses, so manual and automated status changes behave
+    identically in every downstream effect.
+    """
     permission_classes = [permissions.IsAuthenticated]
  
     def post(self, request, pk, action):
@@ -585,37 +596,16 @@ class EmployerApplicationStatusAPIView(APIView):
             )
  
         try:
-            validate_transition(application.status, target_status)
+            apply_status_change(application, target_status, changed_by=user, auto=False)
         except ValueError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
  
-        with transaction.atomic():
-            ApplicationStatusLog.objects.create(
-                application=application,
-                from_status=application.status,
-                to_status=target_status,
-                changed_by=user,
-            )
-            Notification.objects.create(
-                recipient=application.candidate.user,
-                application=application,
-                message=(
-                    f"Your application for '{application.job.title}' is now "
-                    f"'{target_status}'."
-                ),
-            )
-            application.status = target_status
-            application.save(update_fields=["status"])
- 
-        return Response(
-            {
-                "id": application.id,
-                "job": application.job.title,
-                "candidate": application.candidate.full_name,
-                "status": application.status,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response({
+            "id": application.id,
+            "job": application.job.title,
+            "candidate": application.candidate.full_name,
+            "status": application.status,
+        })
  
  
 class ApplicationStatusHistoryAPIView(generics.ListAPIView):
@@ -1354,3 +1344,108 @@ class RankedCandidatesAPIView(APIView):
                 for app in ranked
             ],
         })    
+  
+class RunAutoShortlistingForJobAPIView(APIView):
+    """
+    POST /api/jobs/<job_id>/run-auto-shortlisting/
+ 
+    On-demand trigger for ONE job's automation pass — the same engine
+    the scheduled cron command uses, runnable immediately for testing
+    or for an employer who doesn't want to wait for the next scheduled
+    run. Employer (owner) or Admin only.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def post(self, request, job_id):
+        job = get_object_or_404(Job, pk=job_id)
+        user = request.user
+        is_owner_employer = user.role == "employer" and job.employer.user_id == user.id
+        is_admin = user.role == "admin"
+        if not (is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        results = run_auto_shortlisting_for_job(job, changed_by=user)
+        return Response({"job_id": job.id, "title": job.title, "results": results})
+ 
+ 
+class RunAutoShortlistingPlatformAPIView(APIView):
+    """
+    POST /api/admin/run-auto-shortlisting/
+ 
+    Admin-only, platform-wide on-demand trigger — the same function
+    the scheduled management command calls, for testing the full batch
+    run without touching the server's crontab.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def post(self, request):
+        results = run_auto_shortlisting_platform_wide(changed_by=request.user)
+        summary = {
+            "total_evaluated": len(results),
+            "auto_shortlisted": sum(1 for r in results if r["action"] == "auto_shortlisted"),
+            "auto_rejected": sum(1 for r in results if r["action"] == "auto_rejected"),
+            "no_action": sum(1 for r in results if r["action"] in ("no_action", "skipped")),
+        }
+        return Response({"summary": summary, "results": results})
+ 
+ 
+class ApplicationAutomationOverrideAPIView(APIView):
+    """
+    POST /api/applications/<id>/exclude-from-automation/
+    POST /api/applications/<id>/include-in-automation/
+ 
+    Employer Override deliverable: pull one specific application out
+    of (or back into) auto-processing — e.g. "I want to personally
+    review this one regardless of score." Employer (owner) or Admin only.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+ 
+    def post(self, request, pk, action):
+        application = get_object_or_404(
+            Application.objects.select_related("job__employer"), pk=pk
+        )
+        user = request.user
+        is_owner_employer = (
+            user.role == "employer" and application.job.employer.user_id == user.id
+        )
+        is_admin = user.role == "admin"
+        if not (is_owner_employer or is_admin):
+            raise NotFound()
+ 
+        application.auto_processing_excluded = (action == "exclude")
+        application.save(update_fields=["auto_processing_excluded"])
+ 
+        return Response({
+            "application_id": application.id,
+            "auto_processing_excluded": application.auto_processing_excluded,
+        })      
+
+class EmailLogListAPIView(generics.ListAPIView):
+    """
+    GET /api/admin/email-logs/?status=failed&event_type=rejected
+ 
+    The Delivery Logs deliverable: every queued email, its status,
+    attempt count, and last error if any. Admin-only.
+    """
+    serializer_class = EmailLogSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ["status", "event_type"]
+    ordering_fields = ["created_at", "sent_at"]
+    ordering = ["-created_at"]
+    queryset = EmailLog.objects.select_related("recipient_user", "application")
+ 
+ 
+class SendPendingEmailsAPIView(APIView):
+    """
+    POST /api/admin/send-pending-emails/
+ 
+    On-demand trigger for the same function the scheduled command
+    calls — lets the whole send/retry pipeline be tested via Postman
+    immediately, same pattern as Day 26's admin automation trigger.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+ 
+    def post(self, request):
+        result = send_pending_emails()
+        return Response(result)          

@@ -9,7 +9,8 @@ class JobSerializer(serializers.ModelSerializer):
         fields = [
             "id", "employer", "title", "description", "skills", "experience",
             "salary_min", "salary_max", "location", "job_type", "status",
-            "required_education","posted_at", "updated_at", 
+            "required_education","posted_at", "updated_at", "auto_processing_enabled",
+            "auto_shortlist_threshold", "auto_reject_threshold",
         ]
         read_only_fields = ["id", "employer", "posted_at", "updated_at"]
  
@@ -131,4 +132,14 @@ class AdminActionLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdminActionLog
         fields = ["id", "admin", "admin_email", "action", "target_type", "target_id", "details", "created_at"]
+        read_only_fields = fields        
+
+class EmailLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmailLog
+        fields = [
+            "id", "recipient_email", "event_type", "application", "subject",
+            "status", "attempts", "max_attempts", "last_error",
+            "next_retry_at", "created_at", "sent_at",
+        ]
         read_only_fields = fields        
