@@ -44,7 +44,7 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, blank=True)
-    role = models.CharField(max_length=20, choices=Role.choices, default=Role.CANDIDATE)
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.CANDIDATE,db_index=True)
 
     is_active = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
@@ -280,6 +280,9 @@ class Notification(models.Model):
  
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["recipient", "is_read"], name="notif_recipient_read_idx"),
+        ]
  
     def __str__(self):
         return f"To {self.recipient.email}: {self.message}"
@@ -289,7 +292,7 @@ class AdminActionLog(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
         related_name="admin_actions",
     )
-    action = models.CharField(max_length=50)
+    action = models.CharField(max_length=50,db_index=True)  # e.g. "flag_user", "unflag_user", "delete_job"
     target_type = models.CharField(max_length=50)
     target_id = models.PositiveIntegerField()
     details = models.CharField(max_length=255, blank=True)
@@ -322,14 +325,14 @@ class EmailLog(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
         related_name="email_logs",
     )
-    event_type = models.CharField(max_length=50)  # application_submitted | shortlisted | rejected
+    event_type = models.CharField(max_length=50,db_index=True)  # application_submitted | shortlisted | rejected
     application = models.ForeignKey(
         "Application", on_delete=models.CASCADE, null=True, blank=True,
         related_name="email_logs",
     )
     subject = models.CharField(max_length=255)
     body = models.TextField()
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING,db_index=True)
     attempts = models.PositiveIntegerField(default=0)
     max_attempts = models.PositiveIntegerField(default=3)
     last_error = models.TextField(blank=True)

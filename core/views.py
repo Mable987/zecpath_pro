@@ -32,6 +32,7 @@ from .resume_parser import extract_text, clean_text
 from .resume_nlp import parse_resume
 from .ats_scoring import compute_ats_score
 from .automation import apply_status_change, run_auto_shortlisting_for_job, run_auto_shortlisting_platform_wide
+from django.core.cache import cache
 
 
 # Create your views here.
@@ -545,9 +546,15 @@ class FeaturedJobListAPIView(generics.ListAPIView):
     search_fields = ["title", "description", "skills"]
  
     def get_queryset(self):
-        return Job.objects.select_related("employer").filter(
-            status="active", featured=True
-        )
+        cache_key = "featured_jobs_queryset"
+        cached_ids = cache.get(cache_key)
+        if cached_ids is None:
+            queryset = Job.objects.select_related("employer").filter(
+                status="active", featured=True
+            )
+            cached_ids = list(queryset.values_list("id", flat=True))
+            cache.set(cache_key, cached_ids, timeout=60)   # 60s TTL
+        return Job.objects.select_related("employer").filter(id__in=cached_ids)
  
  
 class LatestJobListAPIView(generics.ListAPIView):
@@ -668,11 +675,16 @@ class JobApplicantsAPIView(generics.ListAPIView):
         return Application.objects.select_related("candidate", "job").filter(job=job)
     
 def _status_breakdown(applications):
-    """Current-status counts, e.g. {"applied": 3, "shortlisted": 2, ...}."""
-    return {
-        value: applications.filter(status=value).count()
-        for value, _ in Application.STATUS_CHOICES
-    }
+    """
+    Current-status counts, e.g. {"applied": 3, "shortlisted": 2, ...}.
+    ONE aggregate query (GROUP BY status) instead of one .count() call
+    per possible status value — 5 round-trips collapsed into 1.
+    """
+    counts = {value: 0 for value, _ in Application.STATUS_CHOICES}
+    rows = applications.values("status").annotate(count=Count("id"))
+    for row in rows:
+        counts[row["status"]] = row["count"]
+    return counts
  
  
 def _shortlist_ratio(applications, total):
@@ -732,7 +744,7 @@ class EmployerDashboardAnalyticsAPIView(APIView):
  
     def get(self, request):
         employer = Employer.objects.get(user=request.user, is_deleted=False)
-        jobs = Job.objects.filter(employer=employer)
+        jobs = Job.objects.filter(employer=employer).annotate(application_count=Count("applications"))
         applications = Application.objects.filter(job__employer=employer)
  
         total_applications = applications.count()
@@ -743,7 +755,7 @@ class EmployerDashboardAnalyticsAPIView(APIView):
                 "job_id": job.id,
                 "title": job.title,
                 "status": job.status,
-                "application_count": job.applications.count(),
+                "application_count": job.application_count,
             }
             for job in jobs
         ]
@@ -996,29 +1008,34 @@ class AdminFlagUserAPIView(APIView):
 class PlatformStatsAPIView(APIView):
     """
     GET /api/admin/stats/overview/
- 
-    High-level platform snapshot: user counts by role, job counts by
-    status, total applications, and how many accounts are currently
-    flagged or deactivated.
     """
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
  
     def get(self, request):
-        users_by_role = {
-            value: User.objects.filter(role=value).count() for value, _ in Role.choices
-        }
-        jobs_by_status = {
-            value: Job.objects.filter(status=value).count() for value, _ in Job.STATUS_CHOICES
-        }
-        return Response({
+        cached = cache.get("admin_platform_stats")
+        if cached is not None:
+            return Response(cached)
+ 
+        role_counts = {value: 0 for value, _ in Role.choices}
+        for row in User.objects.values("role").annotate(count=Count("id")):
+            role_counts[row["role"]] = row["count"]
+ 
+        status_counts = {value: 0 for value, _ in Job.STATUS_CHOICES}
+        for row in Job.objects.values("status").annotate(count=Count("id")):
+            status_counts[row["status"]] = row["count"]
+ 
+        data = {
             "total_users": User.objects.count(),
-            "users_by_role": users_by_role,
+            "users_by_role": role_counts,
             "flagged_users": User.objects.filter(is_flagged=True).count(),
             "deactivated_users": User.objects.filter(is_active=False).count(),
             "total_jobs": Job.objects.count(),
-            "jobs_by_status": jobs_by_status,
+            "jobs_by_status": status_counts,
             "total_applications": Application.objects.count(),
-        })
+        }
+ 
+        cache.set("admin_platform_stats", data, timeout=30)   
+        return Response(data)
  
  
 class UserGrowthStatsAPIView(APIView):

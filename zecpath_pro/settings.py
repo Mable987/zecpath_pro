@@ -80,6 +80,7 @@ MIDDLEWARE = [
     "core.middleware.RoleAuditMiddleware",  # custom middleware for role-based auditing
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "core.middleware.QueryPerformanceMiddleware",
     
 ]
 
@@ -113,6 +114,12 @@ DATABASES = {
     }
 }
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "zecpath-default-cache",
+    }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
